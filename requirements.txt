@@ -1,0 +1,17 @@
+# Core scientific stack
+numpy>=1.26.0
+pandas>=2.1.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.2
+
+# Machine learning (baseline, more later)
+scikit-learn>=1.3.0
+
+# Jupyter for exploration
+jupyterlab>=4.0.0
+notebook>=7.0.0
+
+# Utilities
+tqdm>=4.66.0
