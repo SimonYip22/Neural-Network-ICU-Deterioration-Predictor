@@ -14,13 +14,35 @@ DETAILS_PATH = "data/co2_retainer_details.csv"       # CSV with ABG details
 # 2. Define NEWS2 mapping
 # ------------------------------
 NEWS2_ITEMIDS = {
-    "heart_rate": [220045],
-    "respiratory_rate": [220210],
-    "systolic_bp": [220179],
-    "temperature": [223761],
-    "spo2": [220277],
-    "supplemental_o2": [223835],
-    "level_of_consciousness": [220739, 223900, 223901],
+    "heart_rate": [
+        220045,   # Heart Rate (core)
+        211       # Heart Rate (legacy)
+    ],
+    "respiratory_rate": [
+        220210,   # Resp Rate (core)
+        618       # Resp Rate (legacy)
+    ],
+    "systolic_bp": [
+        220179,   # Arterial BP systolic
+        220050,   # Non-invasive BP systolic
+        225309    # Manual BP systolic
+    ],
+    "temperature": [
+        223761,   # Temperature (C)
+        678       # Temperature (F, sometimes used)
+    ],
+    "spo2": [
+        220277,   # SpO2 (pulse ox)
+        646       # SpO2 (legacy)
+    ],
+    "supplemental_o2": [
+        223835    # FiO2 / Inspired O2
+    ],
+    "level_of_consciousness": [
+        223900,   # GCS - Verbal
+        223901,   # GCS - Motor
+        220739    # GCS - Eye
+    ],
 }
 
 all_itemids = [i for sublist in NEWS2_ITEMIDS.values() for i in sublist]
