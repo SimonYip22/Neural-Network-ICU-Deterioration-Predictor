@@ -1,7 +1,7 @@
 # EWS-Predictive-Dashboard
 Python-based ICU Early Warning System (EWS) predictive dashboard. Uses time-series vitals to detect patient deterioration, benchmarked against NEWS2, with real-time alerts, trend visualisations, and a dual CLI/FastAPI interface. Portfolio-ready, deployed, and clinically-informed.
 
-
+```text
 Raw ICU Vitals (long format, MIMIC-style)
    └─> compute_news2.py
          ├─ Input: raw vitals CSV
@@ -37,3 +37,4 @@ ML Model (LightGBM)
    │   ├─ Use timestamp trends + missingness flags
    │   └─ Evaluate performance (AUROC, precision-recall, etc.)
    └─ Output: predictions, feature importances, evaluation metrics
+```

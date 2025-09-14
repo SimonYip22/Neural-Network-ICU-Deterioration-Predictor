@@ -6,25 +6,21 @@
 
 ### Pipeline Overview
 
+```text
 Raw CSVs (chartevents.csv, etc.)
-        │
-        ▼
+        ↓
 extract_news2_vitals.py
-        │
-        ▼
+        ↓
 news2_vitals.csv
-        │
-        ▼
+        ↓
 check_co2_retainers.py
-        │
-        ▼
+        ↓
 news2_vitals_with_co2.csv + co2_retainer_details.csv
-        │
-        ▼
+        ↓
 compute_news2.py
-        │
-        ▼
+        ↓
 Final NEWS2 scores per patient
+```
 
 ### Goals
 - Extract relevant vital signs from PhysioNet.org MIMIC-IV Clinical Database Demo synthetic dataset for NEWS2 scoring.  
@@ -217,18 +213,24 @@ Final NEWS2 scores per patient
 
 ### Overview
 **For timestamp-level ML features (news2_features_timestamp.csv)**:
+
+```text
 raw long vitals (from MIMIC/ICU)  
     ↓ compute_news2.py  
 news2_scores.csv               ← "clinical truth" (all vitals + NEWS2 + escalation labels)  
     ↓ make_timestamp_features.py
 news2_features_timestamp.csv   ← "ML ready" (numeric features, missingness flags, encodings)  
+```
 
 **For patient-level summary features (news2_features_patient.csv)**:
+
+```text
 raw long vitals  
     ↓ compute_news2.py  
 news2_scores.csv                ← news2_patient_summary.csv not needed
     ↓ make_patient_features.py  
 news2_features_patient.csv      ← ML ready (patient-level aggregates, imputed medians, missingness %)
+```
 
 **The difference**:
 - Timestamp pipeline → preserves row-by-row dynamics (LOCF, staleness, rolling windows).
