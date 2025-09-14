@@ -63,7 +63,7 @@ def score_vital(vital_name, value, co2_retainer=False, fio2=None, gcs=None):
     """Return NEWS2 score for a single vital."""
     if pd.isna(value):
         return 0
-
+    
     if vital_name == "spo2":
         thresholds = vital_thresholds["spo2_thresholds_hypercapnic"] if co2_retainer else vital_thresholds["spo2_thresholds_normal"]
         for low, high, score in thresholds:
