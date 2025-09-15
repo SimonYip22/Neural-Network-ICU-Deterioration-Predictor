@@ -1,13 +1,14 @@
 # --------------------------------------------------------------------
 # NEWS2 Scoring Script
 # Input: news2_vitals_with_co2.csv (long format)
-# Output: news2_scores.csv (wide format with NEWS2 scores)
+# Output: news2_scores.csv (wide format with NEWS2 scores), news2_patient_summary.csv (per-patient summary)
 # --------------------------------------------------------------------
 
 import pandas as pd
 
 # --------------------------------------------------------------------
 # 1. Define NEWS2 thresholds for each vital
+# Each tuple = (low cutoff, high cutoff, NEWS2 score)
 vital_thresholds = {
     "respiratory_rate": [
         (None, 8, 3),
@@ -63,25 +64,25 @@ def score_vital(vital_name, value, co2_retainer=False, fio2=None, gcs=None):
     """Return NEWS2 score for a single vital."""
     if pd.isna(value):
         return 0
-    
+    # handles spo2 differently based on CO2 retainer status
     if vital_name == "spo2":
         thresholds = vital_thresholds["spo2_thresholds_hypercapnic"] if co2_retainer else vital_thresholds["spo2_thresholds_normal"]
         for low, high, score in thresholds:
             if (low is None or value >= low) and (high is None or value <= high):
                 return score
-
+    # supplemental_o2 based on FiO2 if available
     if vital_name == "supplemental_o2":
         flag = 0 if fio2 is not None and fio2 <= 0.21 else 1
         for low, high, score in vital_thresholds["supplemental_o2"]:
             if low <= flag <= high:
                 return score
-
+    # level_of_consciousness based on GCS total
     if vital_name == "level_of_consciousness":
         flag = 0 if gcs == 15 else 1
         for low, high, score in vital_thresholds["level_of_consciousness"]:
             if low <= flag <= high:
                 return score
-
+    # other vitals use standard thresholds  
     if vital_name in vital_thresholds:
         for low, high, score in vital_thresholds[vital_name]:
             if (low is None or value >= low) and (high is None or value <= high):
@@ -91,10 +92,12 @@ def score_vital(vital_name, value, co2_retainer=False, fio2=None, gcs=None):
 
 # ------------------------------
 # 3. Load long-format CSV
-df = pd.read_csv("data/news2_vitals_with_co2.csv")
+# Columns: subject_id, stay_id, charttime, itemid, label, valuenum, co2_retainer.
+df = pd.read_csv("data/interim-data/news2_vitals_with_co2.csv")
 
 # ------------------------------
-# 4. Standardize labels to NEWS2 names
+# 4. Standardise labels to NEWS2 names
+# Makes all labels match NEWS2 names exactly FROM THE D_ITEMS.CSV
 label_mapping = {
     "Temperature": "temperature",
     "O2 saturation pulseoxymetry": "spo2",
@@ -118,6 +121,7 @@ df.loc[fio2_rows, 'supplemental_o2'] = df.loc[fio2_rows, 'fio2_fraction'].apply(
 # ------------------------------
 # 5. Process GCS → raw components + total + level of consciousness
 gcs_rows = df['label'].str.contains("GCS")
+# makes each component columns instead of rows
 gcs_df = df[gcs_rows].pivot_table(
     index=['subject_id', 'stay_id', 'charttime'],
     columns='label',
@@ -131,10 +135,13 @@ gcs_df['level_of_consciousness'] = gcs_df['gcs_total'].apply(lambda x: 0 if x==1
 
 # ------------------------------
 # 6. CO₂ retainer
+# Extract retainer specific columns into a smaller DataFrame
 co2_df = df[['subject_id','stay_id','charttime','co2_retainer']].drop_duplicates()
 
 # ------------------------------
-# 7. Pivot vitals → wide format (NEWS2 vitals)
+# 7. Pivot vitals from long → wide format (NEWS2 vitals)
+# Each row = patient + stay + timestamp, each column = one vital
+# Merge later into the wide-format table, ensuring every patient/timepoint has the correct status
 expected_vitals = ["respiratory_rate","spo2","supplemental_o2",
                    "temperature","systolic_bp","heart_rate"]
 
@@ -151,7 +158,7 @@ for col in expected_vitals:
         wide_df[col] = pd.NA
 
 # ------------------------------
-# 7a. Merge GCS totals and level_of_consciousness only
+# 7a. Merge GCS totals and level_of_consciousness only into main wide_df
 gcs_rows = df['label'].str.contains("GCS")
 gcs_df = df[gcs_rows].pivot_table(
     index=['subject_id','stay_id','charttime'],
@@ -183,15 +190,6 @@ if 'supplemental_o2' not in wide_df.columns:
 
 # Fill missing supplemental_o2 with 0 (Room air)
 wide_df['supplemental_o2'] = wide_df['supplemental_o2'].fillna(0)
-
-# ------------------------------
-# 8. Human-readable columns
-wide_df['consciousness_label'] = wide_df['level_of_consciousness'].apply(
-    lambda x: "Alert" if x==0 else 
-              "New-onset confusion (or disorientation/agitation), responds to voice, responds to pain, or unresponsive"
-)
-wide_df['co2_retainer_label'] = wide_df['co2_retainer'].apply(lambda x: "Yes" if x else "No")
-wide_df['supplemental_o2_label'] = wide_df['supplemental_o2'].apply(lambda x: "Supplemental O₂" if x==1 else "Room air")
 
 # ------------------------------
 # 8. Human-readable columns
@@ -256,18 +254,18 @@ wide_df['missing_vitals'] = wide_df[["respiratory_rate","spo2","supplemental_o2"
 print("Example rows with missing vitals:")
 print(wide_df[wide_df['missing_vitals']>0].head(10))
 
-# Check NEWS2 score ranges
+# Check NEWS2 score ranges (>20 shouldn't exist)
 out_of_range = wide_df[wide_df['news2_score']>20]
 print("Any NEWS2 scores >20 (should be none):")
 print(out_of_range)
 
-# Summarize number of scores per patient
+# Summarise number of scores per patient
 scores_per_patient = wide_df.groupby('subject_id').size().reset_index(name='num_scores')
 print("Number of NEWS2 scores per patient:")
 print(scores_per_patient.head(10))
 
 # ------------------------------
-# 12. Optional per-patient summary CSV
+# 12. Per-patient summary CSV
 patient_summary = wide_df.groupby('subject_id').agg(
     min_news2_score=('news2_score','min'),
     max_news2_score=('news2_score','max'),

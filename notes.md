@@ -370,3 +370,61 @@ if pd.isna(value):
 
 ⸻
 
+## Day 4 Notes - Timestamp-Level ML Features
+
+### Goals
+- Implement make_timestamp_features.py to transform news2_scores.csv into news2_features_timestamp.csv, ready for ML modeling with LightGBM.
+- Follow 8 planned steps for feature engineering at the timestamp level.  
+
+### Planned 8 Steps
+1. Parse charttime → datetime, sort by subject_id & charttime.  
+2. Create missingness flags (per vital, before fills).  
+3. LOCF forward-fill per subject (optionally backward-fill initial missing).  
+4. Create carried-forward flags (1 if value came from LOCF).  
+5. Compute rolling windows (1h, 4h, 24h) → mean, min, max, std, count, slope, AUC.  
+6. Compute time_since_last_observation (staleness per vital).  
+7. Encode risk/escalation labels → numeric ordinal (Low=0, Low-Med=1, Medium=2, High=3).  
+8. Save `news2_features_timestamp.csv` (ML-ready).  
+
+Only Step 1 was implemented today; Steps 2–8 remain.  
+
+### What We Did Today
+- Completed **Step 1 (Load & Sort)**:
+  - Loaded `news2_scores.csv` into a pandas DataFrame.  
+  - Converted `charttime` column to proper `datetime` objects.  
+  - Sorted rows by `subject_id`, `stay_id`, and `charttime` to enforce chronological order per patient stay.  
+  - Verified with a preview (`df.head()`) that the data is clean and ordered.  
+
+### Reflections
+#### Challenges
+- **Pandas syntax** feels overwhelming
+- Spent most of the day revisiting **all previous scripts (`.py`)** in the project to fully annotate them.  
+- The main difficulty was **pandas syntax in general** — not just in this step, but across:
+  - `.sort_values`, `.reset_index`, `.merge`, `.pivot_table`, `.apply`, `.isin`, `.loc`.  
+  - Understanding why certain operations are applied in a specific order.  
+  - Figuring out how pandas “thinks” when reshaping or transforming datasets.  
+- Felt frustrated at how much time was spent **understanding code** instead of **writing new features**.  
+
+### Solutions
+- Added **inline comments** to all major pandas operations across the codebase.  
+- Broke the pipeline into clear **8 steps**, so I can see the bigger picture and where today’s progress fits.  
+- Asked targeted questions (e.g. about return type hints, `.apply()`, `os`, `.merge`) to fill conceptual gaps.  
+
+### Learnings
+- **Pandas is its own language**: It’s not just Python, but a layer of syntax for manipulating tabular data.  
+- **Order of operations matters**: E.g. missingness flags must precede filling, or else ML won’t distinguish true vs imputed values.  
+- **Debugging strategy**: Always print `df.head()` after each major step to confirm changes.  
+- **Reflection is progress**: Even if I only implemented Step 1, I deepened my conceptual foundation, which will make Steps 2–8 easier.  
+
+### Extra Considerations
+- My pace felt slower than expected, but it was necessary to **slow down and understand the building blocks**.  
+- Future steps (e.g. rolling windows, staleness) will require chaining multiple pandas operations — having this stronger foundation will prevent confusion later.  
+- Need to balance **practical coding** (keep pipeline moving) with **conceptual grounding** (understanding transformations).  
+
+
+### 📅 Next Steps (Day 5 Plan)
+- Implement **Step 2 (Missingness flags)**:
+  - Add `_missing` columns for each vital before LOCF.  
+  - Confirm flags align with actual NaNs.  
+- If possible, progress into **Step 3 (LOCF imputation)** and **Step 4 (Carried-forward flags)**.  
+- Keep using small previews (`.head()`, `.isna().sum()`) to verify correctness.  
