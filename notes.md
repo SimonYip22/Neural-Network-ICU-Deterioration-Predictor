@@ -248,6 +248,7 @@ news2_features_patient.csv      ← ML ready (patient-level aggregates, imputed 
   - **Outcome**: All unit tests passed, learned the importance of understanding intermediate variables in scoring pipelines.
   - The main pipeline did not have these problems as gcs_total is converted into level_of_consciousness before the scoring is called, so there was no missing keys.
 
+
 2. **Missing Data Strategy**
   - **Timestamp-level features**:
     - Use LOCF (Last Observation Carried Forward) to maintain temporal continuity.
@@ -261,40 +262,42 @@ news2_features_patient.csv      ← ML ready (patient-level aggregates, imputed 
     -	Do not fill population median at timestamp-level (would break temporal continuity).
     -	Only fill median at patient summary level if some timestamps exist; otherwise, leave as NaN or optionally fallback to population median.
 
+
 3. **Preparing Timestamp-Level ML Features**
 
-  **Pipeline (make_timestamp_features.py)**:
-  1. Start from news2_scores.csv (all vitals + NEWS2 + escalation labels).
-    - Parse charttime as datetime.
-    - Sort by subject_id, charttime.
-  2. Create missingness flags for each vital (before fills).
-  3. LOCF forward-fill per subject (optionally backward-fill for initial missingness or leave as NaN), do not use population median.
-  4. Create carried-forward flags (binary indicator - 1 if the value came from LOCF). Helps ML distinguish between observed vs assumed stable, exploit missingness patterns (e.g. vitals measured more frequently when patients deteriorate).
-  5. **Compute rolling windows (1h, 4h, 24h)**: mean,min,max,std,count,slope,AUC.
-  6. Compute time since last observation (`time_since_last_obs`) for each vital (staleness).
-  7. Convert textual escalation/risk labels → numeric ordinal encoding (Low=0, Low-Medium=1, Medium=2, High=3) for ML. Keeps things simple - one column, easy to track in feature importance
-  8.	Save news2_features_timestamp.csv.
+  - **Pipeline (make_timestamp_features.py)**:
+    1. Start from news2_scores.csv (all vitals + NEWS2 + escalation labels).
+      - Parse charttime as datetime.
+      - Sort by subject_id, charttime.
+    2. Create missingness flags for each vital (before fills).
+    3. LOCF forward-fill per subject (optionally backward-fill for initial missingness or leave as NaN), do not use population median.
+    4. Create carried-forward flags (binary indicator - 1 if the value came from LOCF). Helps ML distinguish between observed vs assumed stable, exploit missingness patterns (e.g. vitals measured more frequently when patients deteriorate).
+    5. **Compute rolling windows (1h, 4h, 24h)**: mean,min,max,std,count,slope,AUC.
+    6. Compute time since last observation (`time_since_last_obs`) for each vital (staleness).
+    7. Convert textual escalation/risk labels → numeric ordinal encoding (Low=0, Low-Medium=1, Medium=2, High=3) for ML. Keeps things simple - one column, easy to track in feature importance
+    8.	Save news2_features_timestamp.csv.
 
-  **Rationale**:
-  - Trees can leverage trends and missingness.
-  -	Rolling windows capture short-, medium-, and long-term deterioration patterns.
-  -	Timestamp features feed ML models like LightGBM directly without further preprocessing.
+  - **Rationale**:
+    - Trees can leverage trends and missingness.
+    -	Rolling windows capture short-, medium-, and long-term deterioration patterns.
+    -	Timestamp features feed ML models like LightGBM directly without further preprocessing.
+
 
 4. **Preparing Patient-Level ML Features**
 
-  **Pipeline (make_patient_features.py)**:
-  1. Start from news2_scores.csv.
-  2. **Group by patient**: Aggregate vitals per patient timeline (median, mean, min, max per vital).
-  3. **Median imputation**: Fill missing values for each vital using patient-specific median (so their profile isn’t biased by others), if a patient never had a vital recorded, fall back to population median.
-  4. **% Missing per vital**: Track proportion of missing values per vital before imputation (HR missing in 30% of their rows = 0.3), missingness itself may signal clinical patterns (e.g. some vitals only measured in deteriorating patients).
-  5. **Encode risk/escalation labels**: Ordinal encoding (Low=0, Low-Medium=1, Medium=2, High=3), calculate summary stats per patient: max risk (highest escalation they reached), median risk (typical risk level), % time at High risk (what fraction of their trajectory was spent here).
-  6. **Output**: news2_features_patient.csv (compact, one row per patient, ML-ready summary).
+  - **Pipeline (make_patient_features.py)**:
+    1. Start from news2_scores.csv.
+    2. **Group by patient**: Aggregate vitals per patient timeline (median, mean, min, max per vital).
+    3. **Median imputation**: Fill missing values for each vital using patient-specific median (so their profile isn’t biased by others), if a patient never had a vital recorded, fall back to population median.
+    4. **% Missing per vital**: Track proportion of missing values per vital before imputation (HR missing in 30% of their rows = 0.3), missingness itself may signal clinical patterns (e.g. some vitals only measured in deteriorating patients).
+    5. **Encode risk/escalation labels**: Ordinal encoding (Low=0, Low-Medium=1, Medium=2, High=3), calculate summary stats per patient: max risk (highest escalation they reached), median risk (typical risk level), % time at High risk (what fraction of their trajectory was spent here).
+    6. **Output**: news2_features_patient.csv (compact, one row per patient, ML-ready summary).
 
-  **Rationale**:
-  -	Median imputation preserves patient-specific patterns without introducing bias from other patients.
-  -	% Missing captures signal from incomplete measurement patterns.
-  -	Ordinal risk encoding simplifies downstream ML model input while retaining interpretability. Together, these three summary features summarise a patient’s escalation profile across their stay. Proportion features (like % high) are standard numeric features (not encoded categories).
-  -	This is enough for model; don’t need optional metrics like streaks, AUC, or rolling windows for the patient summary.
+  - **Rationale**:
+    -	Median imputation preserves patient-specific patterns without introducing bias from other patients.
+    -	% Missing captures signal from incomplete measurement patterns.
+    -	Ordinal risk encoding simplifies downstream ML model input while retaining interpretability. Together, these three summary features summarise a patient’s escalation profile across their stay. Proportion features (like % high) are standard numeric features (not encoded categories).
+    -	This is enough for model; don’t need optional metrics like streaks, AUC, or rolling windows for the patient summary.
 
 
 5. **ML Model Selection**
@@ -310,6 +313,7 @@ news2_features_patient.csv      ← ML ready (patient-level aggregates, imputed 
   -	**Future extension**:
     -	Neural nets possible if dataset size grows significantly.
     -	Would require additional preprocessing: time-series sequences, padding, normalisation, possibly interpolation.
+
 
 ### Validation Issue & Fix: GCS → Level of Consciousness
 **Problem Identified:**
