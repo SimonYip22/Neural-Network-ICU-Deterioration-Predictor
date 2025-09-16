@@ -428,3 +428,66 @@ Only Step 1 was implemented today; Steps 2–8 remain.
   - Confirm flags align with actual NaNs.  
 - If possible, progress into **Step 3 (LOCF imputation)** and **Step 4 (Carried-forward flags)**.  
 - Keep using small previews (`.head()`, `.isna().sum()`) to verify correctness.  
+
+---
+
+## Day 5 Notes - Missingness, Carried-Forward Flags & Rolling Features
+
+### Goals
+- Continue building `make_timestamp_features.py` pipeline.  
+- **Extend Step 2 → Step 5**:
+  - **Step 2**: Add missingness flags.
+  - **Step 3**: Apply forward-filling (LOCF).
+  - **Step 4**: Add carried-forward flags.
+  - **Step 5**: Start rolling window features (mean, min, max, std, slope, AUC).  
+
+### What We Did
+#### Step 2: Missingness Flags
+- Implemented `add_missingness_flags(df)` to generate new columns like `respiratory_rate_missing`, `spo2_missing`, etc.  
+- **Logic**: for each vital, `df[v].isna().astype(int)` creates a flag column where `1 = missing` and `0 = observed`.  
+- Called after loading + sorting the CSV with `load_and_sort_data(INPUT_FILE)`.  
+- Verified output by printing `df.head()`.
+#### Step 3: LOCF (Forward- and Back-Fill)
+- Wrote `apply_locf(df)` to handle missing values by carrying the last observed measurement forward (`ffill`) within each patient stay (`groupby(['subject_id', 'stay_id'])`).  
+- Added an extra `.bfill()` so the very first row of each stay (if missing) is backfilled with the next available measurement.  
+- Ensures no missing values remain for the chosen vitals.
+#### Step 4: Carried-Forward Flags
+- Added `add_carried_forward_flags(df)` to track which values in the filled dataset are real vs imputed.  
+- Used missingness flags from Step 2 as ground truth:  
+  - Carried = `value is not NaN after fill` **AND** `was missing before fill`.  
+- Output = new columns like `respiratory_rate_carried`, `spo2_carried`, etc.  
+- This avoids the problem of falsely marking naturally repeated values as carried-forward.
+#### Step 5: Rolling Features (in progress)
+- Started `add_rolling_features(df)` to compute rolling-window statistics on numeric vitals (`respiratory_rate`, `spo2`, `temperature`, `systolic_bp`, `heart_rate`).  
+- **Window sizes**: 1h, 4h, 24h.  
+- **Stats**: mean, min, max, std, slope (trend), AUC (cumulative exposure).  
+- For each vital × window combination, new feature columns are created, e.g.:
+  - `respiratory_rate_roll1h_mean`  
+  - `spo2_roll24h_slope`  
+- Implemented slope with a simple linear regression on index order; AUC as the cumulative sum over the window.  
+- Still clarifying whether slope/AUC should be computed on true timestamps (`charttime_numeric`) or just index order.  
+
+### Reflections
+#### Challenges
+- **Pandas syntax**:  
+  - Still feels overwhelming, especially with groupby, rolling, and applying custom functions.  
+  - Feels like "watching a chess grandmaster" without yet knowing the moves.  
+- **Redundant flags**:  
+  - Initially thought missingness flags already made carried-forward redundant.  
+  - **Learned they complement each other**: missing = gaps before filling, carried = which values were filled in.
+- **Rolling features**:  
+  - Hard to see how loops systematically build columns.  
+  - `charttime_numeric` looked confusing since we’re not yet using real timestamps in slope/AUC.
+#### Solutions & Learnings
+- Breaking code into **bite-sized functions** helps (e.g., Step 2–4 each modular).  
+- Printing `df.head()` after each step is essential for debugging.  
+- Carried-forward vs missingness flags = subtle but distinct concepts.  
+- Nested loops (`for v in vitals, for w in windows`) → systematic way to generate features.  
+- Recognised unused code (`rolling_features = []`, `charttime_numeric` placeholder).  
+
+### Next Steps
+- Finish **Step 5**:
+  - Decide whether slope/AUC should use real timestamps or simple index order.
+  - Simplify code by removing unused prep.  
+- Validate with small test DataFrame to confirm columns behave as expected.
+- **Move on to Step 6**: **time since last observation** once rolling features are stable.  
