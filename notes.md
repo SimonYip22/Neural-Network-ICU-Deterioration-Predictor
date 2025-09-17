@@ -491,3 +491,77 @@ Only Step 1 was implemented today; Steps 2–8 remain.
   - Simplify code by removing unused prep.  
 - Validate with small test DataFrame to confirm columns behave as expected.
 - **Move on to Step 6**: **time since last observation** once rolling features are stable.  
+
+---
+
+## Day 6 Notes – Rolling Features, Time Since Obs, Risk Encoding
+
+### Goals
+- Continue pipeline development (`make_timestamp_features.py`).
+- Finalise **Step 5–7**:
+  - **Step 5**: Rolling window features (mean, min, max, std, slope, AUC).
+  - **Step 6**: Time since last observation (staleness).
+  - **Step 7**: Encode escalation/risk labels.
+- Add **Step 8**: End-to-end integration to generate the final ML-ready dataset.
+- Resolve slope/AUC approach: simple vs time-aware.
+
+### What We Did
+#### Step 5 – Rolling Window Features
+- Added rolling features for 5 vitals (`HR, RR, SpO₂, Temp, SBP`) across 3 windows (1h, 4h, 24h).  
+- Stats per window: `mean, min, max, std, slope, AUC`.  
+- Implemented **time-aware slope and AUC**:
+  - **Slope** = rate of change per hour, using actual `charttime` gaps.
+  - **AUC** = cumulative exposure over time, integrated with trapezoidal rule.
+- Example **outputs**:
+  - `heart_rate_roll4h_slope` = rate of HR change (bpm/hour).
+  - `spo2_roll24h_auc` = total “oxygen exposure” in the last 24 hours.
+#### Step 6 – Time Since Last Observation
+- Computed `*_time_since_last_obs` for each vital.  
+- Captures how stale each measurement is (fresh vs old data).  
+- **Example**: HR measured 3h ago → `heart_rate_time_since_last_obs = 3.0`.
+#### Step 7 – Encode Risk Labels
+- Created `risk_numeric` column mapping text → numbers:
+  - Low = 0  
+  - Low-Medium = 1  
+  - Medium = 2  
+  - High = 3  
+#### Step 8 – Pipeline Integration
+- End-to-end workflow complete:
+  1. Load & sort data.  
+  2. Add missingness flags.  
+  3. Apply LOCF.  
+  4. Add carried-forward flags.  
+  5. Add rolling window features.  
+  6. Add time since last obs.  
+  7. Encode risk labels.  
+  8. Save final dataset → `news2_features_timestamp.csv`.
+
+### Reflections
+#### Challenges
+- **Slope (trend) choice**:
+  - **Simple slope**: assumes equal spacing (`t = 0,1,2,...`). Works if vitals are frequent/regular, but misleading if sparse (e.g., 2 readings in 5 minutes then none for 8 hours).
+  - **Time-aware slope**: uses real timestamps, slope = change per unit time (e.g., HR 100→120 in 30 mins = +40 bpm/hr vs over 12h = +1.7 bpm/hr).
+- **AUC (cumulative exposure)**:
+  - **Simple AUC**: sum of values only.  
+  - **Time-aware AUC**: integrates over time → reflects true burden/exposure (e.g., SpO₂ 92% for 24h is worse than 92% for 1h).
+- **Pipeline complexity**:
+  - Step 5 added ~90 columns per row. Easy to lose track without systematic naming and notes.
+#### Solutions & Learnings
+- Adopted **time-aware slope & AUC** → features are both ML-useful and clinically interpretable.  
+- LOCF filling made rows “regular,” but we kept real-time slope because clinical interpretability is higher priority.  
+- **Key conceptual clarity**:
+  - **Slope** = trend per unit time.  
+  - **AUC** = exposure burden over time.  
+- Validated that missingness vs carried-forward flags are complementary:
+  - Missing = gaps before fill.  
+  - Carried = synthetic values after fill.  
+
+### Next Steps
+1. **Validate outputs**:
+   - Print a few patient timelines to ensure slope/AUC match clinical intuition.  
+   - Confirm time-since-last-obs is reasonable.  
+2. **Efficiency check**:
+   - Test runtime on full dataset (Step 5 may be slow).  
+3. **Documentation**:
+   - Write a short “feature dictionary” describing each class of features.  
+4. **Step 9**: Aggregate timestamp-level features → patient-level summary for downstream ML.

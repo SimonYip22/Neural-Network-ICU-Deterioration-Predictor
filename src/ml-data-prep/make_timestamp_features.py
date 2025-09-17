@@ -14,8 +14,10 @@ Output: news2_features_timestamp.csv (ML-ready)
 # ------------------------------
 # Imports
 # ------------------------------
-import pandas as pd
-from pathlib import Path
+import pandas as pd       # Provides DataFrame structures and tools to load, manipulate, and analyse tabular data (CSVs).
+import numpy as np        # Provides numerical operations, arrays, and functions (e.g., mean, std, linear regression for slope calculations).
+from pathlib import Path  # Provides an easy, platform-independent way to handle file paths (used to define input/output CSV paths).
+from numpy import trapz   # Imports the trapezoidal integration function to compute time-aware area under the curve (AUC) for rolling features.
 
 # ------------------------------
 # Config: file paths
@@ -42,11 +44,6 @@ def load_and_sort_data(input_file: Path) -> pd.DataFrame:
 
     return df # return clean and sorted DataFrame
 
-if __name__ == "__main__":
-    df = load_and_sort_data(INPUT_FILE)
-    print("Data loaded and sorted. Sample:")
-    print(df.head())
-
 # ----------------------------------------------------
 # Step 2: Create missingness flags before filling
 # ----------------------------------------------------
@@ -62,12 +59,6 @@ def add_missingness_flags(df: pd.DataFrame) -> pd.DataFrame:
         df[flag_col] = df[v].isna().astype(int) # checks if value is NaN, returns a boolean, then converts to int (1 if NaN, else 0)
                                                 # store in new column df[flag_col]
     return df 
-
-if __name__ == "__main__":
-    df = load_and_sort_data(INPUT_FILE) # df is loaded and sorted, then returned
-    df = add_missingness_flags(df) # missingness flag function is called here, and df is called and updated
-    print("Data with missingness flags. Sample:")
-    print(df.head())
 
 # -------------------------------------
 # Step 3: LOCF forward-fill per subject
@@ -91,14 +82,6 @@ def apply_locf(df: pd.DataFrame) -> pd.DataFrame:
     df[vitals] = df.groupby(["subject_id", "stay_id"])[vitals].bfill()
 
     return df
-
-
-if __name__ == "__main__":
-    df = load_and_sort_data(INPUT_FILE)
-    df = add_missingness_flags(df)
-    df = apply_locf(df)
-    print("Data after LOCF applied. Sample:")
-    print(df.head(20))
 
 # -------------------------------------
 # Step 4: Create carried-forward flags
@@ -126,14 +109,6 @@ def add_carried_forward_flags(df: pd.DataFrame) -> pd.DataFrame:
 
     return df # Returns the same DataFrame with the new _carried columns added.
 
-if __name__ == "__main__":
-    df = load_and_sort_data(INPUT_FILE)
-    df = add_missingness_flags(df)
-    df = apply_locf(df)
-    df = add_carried_forward_flags(df)
-    print("Data with carried-forward flags. Sample:")
-    print(df.head(20))
-
 # -------------------------------------
 # Step 5: Compute rolling window features
 # -------------------------------------
@@ -144,46 +119,134 @@ if __name__ == "__main__":
 
 # NumPy is used for numerical operations like slope and AUC calculations
 import numpy as np
+from numpy import trapz
 
 def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
     # These 5 vitals will have rolling windows computed (numeric ones only)
     vitals = ["respiratory_rate", "spo2", "temperature", "systolic_bp", "heart_rate"]
     # Time window sizes in hours (3 total)
-    windows = [1, 4, 24]
-    # Stats to compute per window (6 total)
-    stats = ["mean", "min", "max", "std", "slope", "auc"]
-
-    # Convert charttime to numeric timestamp for slope/AUC calculations
-    df['charttime_numeric'] = df['charttime'].astype('int64') / 1e9  # seconds since epoch
+    windows = [1, 4, 24] 
 
     # Loop through every vital and window size
     for v in vitals:
         for w in windows:
-            # 
-            roll = df.groupby(['subject_id', 'stay_id'])[v].rolling(
+            # Create rolling object per patient stay and vital 
+            # groupby → keeps each patient’s admission separate
+            # .rolling(f"{w}H", on='charttime') → creates a lookback time window of size w hours (e.g. for 1H, at 10:00 it looks back at 9:00-10:00).
+            # on='charttime' → tells pandas to use charttime as the time reference.
+            # min_periods=1 → if only 1 point exists in that window, still return something (itself, otherwise it’d be NaN).
+            roll = df.groupby(['subject_id', 'stay_id']).rolling(
                 f"{w}H", on='charttime', min_periods=1
-            )
+            )[v] # rolling object for df[v] 
+
             # Mean, min, max → capture magnitude.
             # Std → capture variability.
             # Slope → capture trend/direction.
             # AUC → capture cumulative exposure/risk over time.
 
-            # Compute stats
+            # Compute stats and add them as new columns to df
+            # .reset_index(level=[0,1], drop=True) → flattens the grouped index back so it lines up with the original dataframe (removes the extra groupby index).
             df[f"{v}_roll{w}h_mean"] = roll.mean().reset_index(level=[0,1], drop=True)
             df[f"{v}_roll{w}h_min"] = roll.min().reset_index(level=[0,1], drop=True)
             df[f"{v}_roll{w}h_max"] = roll.max().reset_index(level=[0,1], drop=True)
             df[f"{v}_roll{w}h_std"] = roll.std().reset_index(level=[0,1], drop=True)
 
-            # Slope via linear regression (simple approach)
+            # Time-aware slope calculation reflects rate of change over real time, not “per row.”
             def slope_func(x):
-                if len(x) < 2: return np.nan
-                t = np.arange(len(x))
-                return np.polyfit(t, x, 1)[0]
-            df[f"{v}_roll{w}h_slope"] = roll.apply(slope_func, raw=False).reset_index(level=[0,1], drop=True)
+                if len(x) < 2: 
+                    return np.nan # Need at least 2 points to fit a line
+                t = x.index.get_level_values("charttime").astype("int64") / 3600e9  # hours
+                y = x.values # actual vital measurements 
+                # Fit line y = a*t + b, return slope (a) 
+                return np.polyfit(t, y, 1)[0] # fits a straight line through the points (t, y) in the form y = a*t + b, return slope a
+            df[f"{v}_roll{w}h_slope"] = roll.apply(slope_func, raw=False).reset_index(level=[0,1], drop=True) # new column added to df
 
-            # AUC (cumulative sum * delta time)
-            df[f"{v}_roll{w}h_auc"] = roll.apply(lambda x: np.nansum(x), raw=False).reset_index(level=[0,1], drop=True)
+            # Time-aware AUC captures cumulative exposure/risk over time.
+            # Instead of summing values, we integrate over time with the trapezoidal rule
+            def auc_func(x):
+                if len(x) < 2: 
+                    return np.nan
+                t = x.index.get_level_values("charttime").astype("int64") / 3600e9  # hours
+                y = x.values
+                return np.trapz(y, t)  # trapezoidal integration of y over time t
+            
+            df[f"{v}_roll{w}h_auc"] = roll.apply(auc_func, raw=False).reset_index(level=[0,1], drop=True)
 
-    # Drop temporary numeric timestamp
-    df = df.drop(columns=['charttime_numeric'])
+    return df # return the new df
+
+# -----------------------------------------------
+# Step 6: Time Since Last Observation (staleness)
+# -----------------------------------------------
+# Computes how much time has passed since the previous observation for each vital.
+# Helps models know if a reading is fresh or old
+# Patients with rapidly changing vitals may have shorter intervals between measurements.
+def add_time_since_last_obs(df: pd.DataFrame) -> pd.DataFrame:
+    vitals = [
+        "respiratory_rate", "spo2", "supplemental_o2",
+        "temperature", "systolic_bp", "heart_rate",
+        "level_of_consciousness", "co2_retainer"
+    ]
+    
+    # Sort df by patient, stay, and time
+    df = df.sort_values(by=['subject_id', 'stay_id', 'charttime'])
+    
+    # Loop through each vital
+    for v in vitals:
+        # Compute time difference for each patient stay and store as new column
+        df[f"{v}_time_since_last_obs"] = (
+            # Groups charttime column by patient and stay
+            df.groupby(['subject_id', 'stay_id'])['charttime']
+              .diff()  # computes difference between consecutive charttimes, if no previous row, returns NaN
+              .dt.total_seconds() / 3600  # convert seconds to hours
+        )
+        
+        # First row per patient/stay will have NaN → fill with 0 instead
+        df[f"{v}_time_since_last_obs"] = df[f"{v}_time_since_last_obs"].fillna(0)
+        
     return df
+
+# -------------------------------------
+# Step 7: Encode risk/escalation labels
+# -------------------------------------
+# Converts textual escalation/risk labels into numeric ordinal values.
+# Model cannot operate on text directly, only with numeric outputs
+def encode_risk_labels(df: pd.DataFrame) -> pd.DataFrame:
+    risk_map = {
+        "Low": 0,
+        "Low-Medium": 1,
+        "Medium": 2,
+        "High": 3
+    }
+    
+    # Create a new numeric column, by selecting risk column from df
+    # .map() method applies a dictionary to every value in a series (column)
+    # The original risk column stays intact, so we still have the textual labels if needed for reference.
+    df['risk_numeric'] = df['risk'].map(risk_map)
+    
+    return df
+
+# -----------------------------------
+# Step 8: Save the final DataFrame
+# -----------------------------------
+# Save the ML-ready features
+def save_features(df: pd.DataFrame, output_file: Path):
+    df.to_csv(output_file, index=False)
+    print(f"ML-ready features saved to {output_file}")
+
+# ---------------
+# Main pipeline
+# ---------------
+def main():
+    df = load_and_sort_data(INPUT_FILE)
+    df = add_missingness_flags(df)
+    df = apply_locf(df)
+    df = add_carried_forward_flags(df)
+    df = add_rolling_features(df)
+    df = add_time_since_last_obs(df)
+    df = encode_risk_labels(df)
+    save_features(df, OUTPUT_FILE)
+    print("Pipeline complete. Sample:")
+    print(df.head(10))
+
+if __name__ == "__main__":
+    main()
