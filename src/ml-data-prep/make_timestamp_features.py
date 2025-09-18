@@ -17,14 +17,16 @@ Output: news2_features_timestamp.csv (ML-ready)
 import pandas as pd       # Provides DataFrame structures and tools to load, manipulate, and analyse tabular data (CSVs).
 import numpy as np        # Provides numerical operations, arrays, and functions (e.g., mean, std, linear regression for slope calculations).
 from pathlib import Path  # Provides an easy, platform-independent way to handle file paths (used to define input/output CSV paths).
-from numpy import trapz   # Imports the trapezoidal integration function to compute time-aware area under the curve (AUC) for rolling features.
+from numpy import trapezoid   # Imports the trapezoidal integration function to compute time-aware area under the curve (AUC) for rolling features.
 
 # ------------------------------
 # Config: file paths
 # ------------------------------
-DATA_DIR = Path("../data/processed-data")
-INPUT_FILE = DATA_DIR / "news2_scores.csv"
-OUTPUT_FILE = DATA_DIR / "news2_features_timestamp.csv"
+DATA_DIR_INPUT = Path("../../data/interim-data")       # where the input lives
+DATA_DIR_OUTPUT = Path("../../data/processed-data")    # where the output should go
+
+INPUT_FILE = DATA_DIR_INPUT / "news2_scores.csv"
+OUTPUT_FILE = DATA_DIR_OUTPUT / "news2_features_timestamp.csv"
 
 # ------------------------------
 # Step 1: Load & Sort
@@ -136,7 +138,7 @@ def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
             # on='charttime' → tells pandas to use charttime as the time reference.
             # min_periods=1 → if only 1 point exists in that window, still return something (itself, otherwise it’d be NaN).
             roll = df.groupby(['subject_id', 'stay_id']).rolling(
-                f"{w}H", on='charttime', min_periods=1
+                f"{w}h", on='charttime', min_periods=1
             )[v] # rolling object for df[v] 
 
             # Mean, min, max → capture magnitude.
@@ -145,11 +147,11 @@ def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
             # AUC → capture cumulative exposure/risk over time.
 
             # Compute stats and add them as new columns to df
-            # .reset_index(level=[0,1], drop=True) → flattens the grouped index back so it lines up with the original dataframe (removes the extra groupby index).
-            df[f"{v}_roll{w}h_mean"] = roll.mean().reset_index(level=[0,1], drop=True)
-            df[f"{v}_roll{w}h_min"] = roll.min().reset_index(level=[0,1], drop=True)
-            df[f"{v}_roll{w}h_max"] = roll.max().reset_index(level=[0,1], drop=True)
-            df[f"{v}_roll{w}h_std"] = roll.std().reset_index(level=[0,1], drop=True)
+            # .reset_index(drop=True) → flattens the grouped index back so it lines up with the original dataframe (removes the extra groupby index).
+            df[f"{v}_roll{w}h_mean"] = (roll.mean().reset_index(drop=True))
+            df[f"{v}_roll{w}h_min"] = (roll.min().reset_index(drop=True))
+            df[f"{v}_roll{w}h_max"] = (roll.max().reset_index(drop=True))
+            df[f"{v}_roll{w}h_std"] = (roll.std().reset_index(drop=True))
 
             # Time-aware slope calculation reflects rate of change over real time, not “per row.”
             def slope_func(x):
@@ -159,7 +161,7 @@ def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
                 y = x.values # actual vital measurements 
                 # Fit line y = a*t + b, return slope (a) 
                 return np.polyfit(t, y, 1)[0] # fits a straight line through the points (t, y) in the form y = a*t + b, return slope a
-            df[f"{v}_roll{w}h_slope"] = roll.apply(slope_func, raw=False).reset_index(level=[0,1], drop=True) # new column added to df
+            df[f"{v}_roll{w}h_slope"] = roll.apply(slope_func, raw=False).reset_index(drop=True) # new column added to df
 
             # Time-aware AUC captures cumulative exposure/risk over time.
             # Instead of summing values, we integrate over time with the trapezoidal rule
@@ -168,9 +170,9 @@ def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
                     return np.nan
                 t = x.index.get_level_values("charttime").astype("int64") / 3600e9  # hours
                 y = x.values
-                return np.trapz(y, t)  # trapezoidal integration of y over time t
+                return np.trapezoid(y, t)  # trapezoidal integration of y over time t
             
-            df[f"{v}_roll{w}h_auc"] = roll.apply(auc_func, raw=False).reset_index(level=[0,1], drop=True)
+            df[f"{v}_roll{w}h_auc"] = roll.apply(auc_func, raw=False).reset_index(drop=True)
 
     return df # return the new df
 

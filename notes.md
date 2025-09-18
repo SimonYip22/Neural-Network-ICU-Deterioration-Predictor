@@ -237,34 +237,30 @@ news2_features_patient.csv      ← ML ready (patient-level aggregates, imputed 
 -	Patient pipeline → collapses timeline into patient-level summaries (medians, % missing, escalation profile).
 
 ### What We Did
+#### Step 1: Validating NEWS2 Scoring
+- **Action**: Ran validate_news2_scoring.py on test dictionaries.
+- **Findings**:
+  - Low GCS cases initially produced incorrect scores.
+  - The scoring function ignored consciousness because row.get("level_of_consciousness", pd.NA) returned pd.NA.
+  -	Other special cases (SpO₂, supplemental O₂) were correctly scored because their thresholds were handled explicitly.
+- **Fixes**: Moved `if pd.isna(value): return 0` **to the end of the function**.
+- **Outcome**: All unit tests passed, learned the importance of understanding intermediate variables in scoring pipelines.
+- The main pipeline did not have these problems as gcs_total is converted into level_of_consciousness before the scoring is called, so there was no missing keys.
 
-1. **Validating NEWS2 Scoring**
-  - **Action**: Ran validate_news2_scoring.py on test dictionaries.
-  - **Findings**:
-    - Low GCS cases initially produced incorrect scores.
-    - The scoring function ignored consciousness because row.get("level_of_consciousness", pd.NA) returned pd.NA.
-    -	Other special cases (SpO₂, supplemental O₂) were correctly scored because their thresholds were handled explicitly.
-  - **Fixes**: Moved `if pd.isna(value): return 0` **to the end of the function**.
-  - **Outcome**: All unit tests passed, learned the importance of understanding intermediate variables in scoring pipelines.
-  - The main pipeline did not have these problems as gcs_total is converted into level_of_consciousness before the scoring is called, so there was no missing keys.
+#### Step 2: Missing Data Strategy
+- **Timestamp-level features**:
+  - Use LOCF (Last Observation Carried Forward) to maintain temporal continuity.
+  - Add missingness flags (1 if value was carried forward) so models can learn from missing patterns.
+  - **Justification**: mimics clinical reality; preserves trends; Tree-based models like LightGBM handle NaNs naturally.
+- **Patient-level summary features**:
+  - Use median imputation per patient timeline if a vital is missing across some timestamps.
+  -	Include % of missing timestamps as a feature.
+  -	**Justification**: balances robustness with bias avoidance; prevents skewing min/max/mean statistics.
+-	**Key decisions**:
+  -	Do not fill population median at timestamp-level (would break temporal continuity).
+  -	Only fill median at patient summary level if some timestamps exist; otherwise, leave as NaN or optionally fallback to population median.
 
-
-2. **Missing Data Strategy**
-  - **Timestamp-level features**:
-    - Use LOCF (Last Observation Carried Forward) to maintain temporal continuity.
-    - Add missingness flags (1 if value was carried forward) so models can learn from missing patterns.
-    - **Justification**: mimics clinical reality; preserves trends; Tree-based models like LightGBM handle NaNs naturally.
-  - **Patient-level summary features**:
-    - Use median imputation per patient timeline if a vital is missing across some timestamps.
-    -	Include % of missing timestamps as a feature.
-    -	**Justification**: balances robustness with bias avoidance; prevents skewing min/max/mean statistics.
-  -	**Key decisions**:
-    -	Do not fill population median at timestamp-level (would break temporal continuity).
-    -	Only fill median at patient summary level if some timestamps exist; otherwise, leave as NaN or optionally fallback to population median.
-
-
-3. **Preparing Timestamp-Level ML Features**
-
+#### Step 3: Preparing Timestamp-Level ML Features
 **Pipeline (make_timestamp_features.py)**:
 1. Start from news2_scores.csv (all vitals + NEWS2 + escalation labels).
   - Parse charttime as datetime.
@@ -276,15 +272,12 @@ news2_features_patient.csv      ← ML ready (patient-level aggregates, imputed 
 6. Compute time since last observation (`time_since_last_obs`) for each vital (staleness).
 7. Convert textual escalation/risk labels → numeric ordinal encoding (Low=0, Low-Medium=1, Medium=2, High=3) for ML. Keeps things simple - one column, easy to track in feature importance
 8. Save news2_features_timestamp.csv.
-
 **Rationale**:
 - Trees can leverage trends and missingness.
 -	Rolling windows capture short-, medium-, and long-term deterioration patterns.
 -	Timestamp features feed ML models like LightGBM directly without further preprocessing.
 
-
-4. **Preparing Patient-Level ML Features**
-
+#### Step 4: Preparing Patient-Level ML Features
 **Pipeline (make_patient_features.py)**:
 1. Start from news2_scores.csv.
 2. **Group by patient**: Aggregate vitals per patient timeline (median, mean, min, max per vital).
@@ -292,27 +285,25 @@ news2_features_patient.csv      ← ML ready (patient-level aggregates, imputed 
 4. **% Missing per vital**: Track proportion of missing values per vital before imputation (HR missing in 30% of their rows = 0.3), missingness itself may signal clinical patterns (e.g. some vitals only measured in deteriorating patients).
 5. **Encode risk/escalation labels**: Ordinal encoding (Low=0, Low-Medium=1, Medium=2, High=3), calculate summary stats per patient: max risk (highest escalation they reached), median risk (typical risk level), % time at High risk (what fraction of their trajectory was spent here).
 6. **Output**: news2_features_patient.csv (compact, one row per patient, ML-ready summary).
-
 **Rationale**:
 -	Median imputation preserves patient-specific patterns without introducing bias from other patients.
 -	% Missing captures signal from incomplete measurement patterns.
 -	Ordinal risk encoding simplifies downstream ML model input while retaining interpretability. Together, these three summary features summarise a patient’s escalation profile across their stay. Proportion features (like % high) are standard numeric features (not encoded categories).
 -	This is enough for model; don’t need optional metrics like streaks, AUC, or rolling windows for the patient summary.
 
-
-5. **ML Model Selection**
-  -	**Options considered**:
-    -	Logistic Regression → easy to deploy and explainable but underpowered, tends to underperform on raw time-series vitals.
-    -	Deep learning (LSTMs/Transformers) → overkill, prone to overfitting with moderate datasets.
-    -	Boosted Trees (XGBoost / LightGBM / CatBoost) → robust for tabular ICU data, handle NaNs, train fast, interpretable.
-  -	**Decision: LightGBM (Gradient Boosted Decision Tree (GBDT) library)**
-    - State-of-the-art for structured tabular data (EHR/ICU vitals is tabular + time-series).
-    -	Handles missing values natively (NaNs) → no additional imputation required (simpler pipeline).
-    -	Provides feature importances → interpretability for clinical review.
-    -	Easy to train/evaluate quickly → allows multiple experiments.
-  -	**Future extension**:
-    -	Neural nets possible if dataset size grows significantly.
-    -	Would require additional preprocessing: time-series sequences, padding, normalisation, possibly interpolation.
+#### Step 5: ML Model Selection
+-	**Options considered**:
+  -	Logistic Regression → easy to deploy and explainable but underpowered, tends to underperform on raw time-series vitals.
+  -	Deep learning (LSTMs/Transformers) → overkill, prone to overfitting with moderate datasets.
+  -	Boosted Trees (XGBoost / LightGBM / CatBoost) → robust for tabular ICU data, handle NaNs, train fast, interpretable.
+-	**Decision: LightGBM (Gradient Boosted Decision Tree (GBDT) library)**
+  - State-of-the-art for structured tabular data (EHR/ICU vitals is tabular + time-series).
+  -	Handles missing values natively (NaNs) → no additional imputation required (simpler pipeline).
+  -	Provides feature importances → interpretability for clinical review.
+  -	Easy to train/evaluate quickly → allows multiple experiments.
+-	**Future extension**:
+  -	Neural nets possible if dataset size grows significantly.
+  -	Would require additional preprocessing: time-series sequences, padding, normalisation, possibly interpolation.
 
 
 ### Validation Issue & Fix: GCS → Level of Consciousness
@@ -323,11 +314,9 @@ news2_features_patient.csv      ← ML ready (patient-level aggregates, imputed 
 2. If the row dictionary does not contain `level_of_consciousness` yet (common in synthetic test cases), `value=pd.NA`.
 3. Original code had `if pd.isna(value): return 0` at the top of `score_vital`.
 4. This caused the function to exit **before using `gcs_total` to compute LOC**, so low GCS patients were scored incorrectly.
-
 **Other Contributing Factor:**
 - `level_of_consciousness` exists as a key in `vital_thresholds`.  
 - The generic “Other vitals” block ran first, attempting to score with `value=pd.NA`, bypassing LOC-specific logic.
-
 **Fix Implemented:**
 - Moved `if pd.isna(value): return 0` **to the end of the function**.
 - Ensured the LOC-specific block runs **before** the generic “Other vitals” block.  
@@ -404,13 +393,11 @@ Only Step 1 was implemented today; Steps 2–8 remain.
   - Understanding why certain operations are applied in a specific order.  
   - Figuring out how pandas “thinks” when reshaping or transforming datasets.  
 - Felt frustrated at how much time was spent **understanding code** instead of **writing new features**.  
-
-### Solutions
+#### Solutions
 - Added **inline comments** to all major pandas operations across the codebase.  
 - Broke the pipeline into clear **8 steps**, so I can see the bigger picture and where today’s progress fits.  
 - Asked targeted questions (e.g. about return type hints, `.apply()`, `os`, `.merge`) to fill conceptual gaps.  
-
-### Learnings
+#### Learnings
 - **Pandas is its own language**: It’s not just Python, but a layer of syntax for manipulating tabular data.  
 - **Order of operations matters**: E.g. missingness flags must precede filling, or else ML won’t distinguish true vs imputed values.  
 - **Debugging strategy**: Always print `df.head()` after each major step to confirm changes.  
@@ -565,3 +552,164 @@ Only Step 1 was implemented today; Steps 2–8 remain.
 3. **Documentation**:
    - Write a short “feature dictionary” describing each class of features.  
 4. **Step 9**: Aggregate timestamp-level features → patient-level summary for downstream ML.
+
+---
+
+## Day 7 Notes - Timestamp Pipeline Complete & Patient Features Begun
+
+### Goals
+- Run and debug `make_timestamp_features.py` end-to-end.  
+- Verify that the generated CSV (`news2_features_timestamp.csv`) is correct.  
+- Decide which model (LightGBM vs Neural Network) uses which feature set.  
+- **Finalise model roadmap**: V1 = LightGBM on patient-level, V2 = Neural Network (TCN) on timestamp-level.  
+- Begin implementing `make_patient_features.py` (Steps 1–2). 
+
+### Overview 
+```text
+  Raw EHR Data (vitals, observations, lab results)
+         │
+         ▼
+Timestamp Feature Engineering (news2_scores.csv)
+ - Rolling statistics (mean, min, max, std)
+ - Slopes, AUC, time since last observation
+ - Imputation & missingness flags
+         │
+         ├─────────────► Neural Network Models (v2)
+         │              - Input: full time-series per patient
+         │              - Can learn temporal patterns, trends, dynamics
+         │
+         ▼
+Patient-Level Feature Aggregation (make_patient_features.py → news2_features_patient.csv)
+ - Median, mean, min, max per vital
+ - Impute missing values
+ - % missing per vital
+ - Risk summary stats (max, median, % time at high risk)
+ - Ordinal encoding for risk/escalation
+         │
+         ▼
+LightGBM Model (v1)
+ - Input: one row per patient (fixed-length vector)
+ - Uses aggregated statistics only
+ - Cannot handle sequences or variable-length time series
+ ```
+
+### What We Did
+1. **Ran `make_timestamp_features.py` successfully**:
+   - Adjusted file paths to go two levels up (`../../`) because script runs inside `src/ml-data-prep/`.
+   - Resolved duplicate index alignment error by using `.reset_index(drop=True)` which flattens everything back to a simple index that lines up exactly with DataFrame’s rows, instead of dropping groupby levels `.reset_index(level=[0,1], drop=True)` as charttime can have duplicates which confuses pandas when it tries to align by index labels.
+   - Fixed rolling window warnings (`'H'` → `'h'`).
+   - Output CSV generated: `news2_features_timestamp.csv`.
+2. **Debugging Learnings**:
+   - **File Paths**:  
+     ```python
+     DATA_DIR_INPUT = Path("../../data/interim-data")
+     DATA_DIR_OUTPUT = Path("../../data/processed-data")
+     ```
+     → Ensures script looks in correct `data/` directories when run from `src/ml-data-prep/`.
+   - **Duplicate Index Issue**:  
+     - After `groupby().rolling()`, result had a MultiIndex (patient, stay, charttime).
+     - Using `.reset_index(level=[0,1], drop=True)` caused misalignment if charttime was duplicated (after LOCF). Pandas cannot reindex on an axis with duplicate labels.
+     - Fix: `.reset_index(drop=True)` → guarantees the Series index matches the DataFrame’s row index.
+   - **Trapz Deprecation**: `np.trapz` still works but shows warning; recommended future replacement with `np.trapezoid`.
+   - **PerformanceWarning**: Adding 90+ columns one-by-one fragments the DataFrame; harmless but could be optimized with `pd.concat`.
+3. **Model Roadmap Finalised**:
+   - **V1: LightGBM (Gradient Boosted Decision Trees)**  
+     - **Input**: `news2_features_patient.csv`.  
+     - **Output**: news2_features_patient.csv → LightGBM → AUROC, feature importances.
+     - One row per patient, interpretable, strong baseline.
+     - Very interpretable for clinicians (median HR, % missing SpO₂, % time high risk).  
+   - **V2: Neural Network (TCN – Temporal Convolutional Network)**  
+     - **Input**: `news2_features_timestamp.csv`.  
+     - **Output**: news2_features_timestamp.csv → TCN → sequence classification (predict escalation).
+     - Full time-series per patient, captures sequential deterioration patterns.
+     - Demonstrates modern advanced deep learning sequence modeling.  
+     - Shows can move from tabular ML → time-series DL progression.
+     - More impressive to interviewers / academics (future-proof).
+4. **Neural Network Model Selection**:
+   - **Considered**: LSTM/GRU, Transformers, TCN.  
+   - **Decision: TCN** because it handles long sequences efficiently, avoids vanishing gradients, and trains faster than RNNs.  
+   - **Requirements**: sequence padding, normalization, masking for missingness.  
+5. **Started `make_patient_features.py`**:
+   - **Step 1**: Load CSV, sort by patient/time.  
+   - **Step 2**: Aggregate vitals with `.groupby("subject_id").agg(["median","mean","min","max"])`.  
+   - Learned how `agg()` outputs a MultiIndex → flattening into `vital_stat` format.  
+   - Steps 3–6 (imputation, % missingness, risk encoding, save CSV) still to do.  
+
+ ### Neural Network Model Selection
+- **Options considered**:
+  - **Recurrent Neural Networks (LSTM / GRU)** → well-suited for sequences but prone to vanishing gradients on long ICU stays, slower to train.
+  - **Transformers** → powerful for long sequences, but overkill for moderate dataset size, computationally intensive.
+  - **Temporal Convolutional Networks (TCN)** → convolutional sequence modeling, parallelizable, captures long-term dependencies efficiently.
+- **Decision: TCN (Temporal Convolutional Network)**
+  - Ideal for time-series vitals data with sequential trends.
+  - Can handle long sequences without vanishing gradient issues like recurrent neural networks (RNN).
+  - Parallel convolutional operations → faster training than sequential RNNs.
+  - Compatible with timestamp-level features and missingness flags.
+- **Preprocessing requirements**:
+  - Sequence padding to unify input lengths.
+  - Normalisation of continuous vitals.
+  - Optional interpolation or masking for missing values.
+  - One-hot encoding of categorical labels if required.
+- **Strengths**:
+  - Captures temporal patterns and trends across patient stays.
+  - Expressive for sequence modeling where LightGBM may miss temporal dynamics.
+  - Empirically outperforms LSTM/GRU for moderate-length clinical sequences.
+- **Weaknesses / Limitations**:
+  - More computationally intensive than tree-based models.
+  - Less interpretable than LightGBM feature importances.
+  - Requires careful tuning of hyperparameters (kernel size, dilation, layers).
+- **Use case in pipeline**:
+  - Secondary model after LightGBM to capture fine-grained temporal trends.
+  - Useful for sequences where timestamp-level patterns predict escalation more accurately.
+
+### Planned 6 Steps
+1. Load input file `news2_scores.csv`.  
+2. Aggregate vitals per patient (median, mean, min, max).  
+3. Perform patient-specific median imputation (fallback to population median if never observed).  
+4. Compute % missingness per vital (fraction of rows missing before imputation).  
+5. Encode risk/escalation labels → numeric ordinal (Low=0, Low-Med=1, Medium=2, High=3), then summarise per patient (max risk, median risk, % time at High risk).  
+6. Save `news2_features_patient.csv` (one row per patient, ML-ready).  
+
+Only Steps 1-2 were implemented today; Steps 3-6 remain.
+
+### Reflections
+#### Challenges
+- **Indexing Misalignments**: Rolling window outputs had MultiIndex misaligned with base DataFrame → caused reindexing errors.  
+- **Path Confusion**: Needed to carefully reason about relative paths when running scripts inside `src/`.  
+- **Flattening MultiIndexes**: Initially confusing to understand multiindexing and how `(vital, stat)` pairs became clean `vital_stat` columns.  
+#### Solutions
+- Used `.reset_index(drop=True)` to align rolling stats with DataFrame rows.  
+- Standardised file paths with `../../` from script location.  
+- Flattened MultiIndex columns using `["_".join(col) for col in df.columns]`.  
+#### Learnings
+- Index ≠ header → the index is the row labels, not the column names.  
+- Duplicated timestamps (after LOCF) can break alignment if not flattened.  
+- **Timestamp vs Patient-level features serve complementary roles**:  
+  - **Timestamp features** = sequence models.  
+  - **Patient features** = tree-based baselines.  
+- Portfolio-wise, showing both LightGBM and TCN demonstrates breadth (tabular ML + time-series DL).  
+
+### Extra insights
+- **Future-proofing with both feature sets ensures robustness and flexibility**:
+  - **LightGBM (V1)** → clinician-friendly, interpretable baseline.  
+  - **TCN (V2)** → modern DL, captures dynamics.  
+- **Timestamp-level features** = richest representation, essential for sequence models / deep learning
+- **Patient-level features** = distilled summaries, useful to quickly test simpler models, feature importance or quick baseline metrics.
+- Keeping both pipelines means we can mix (hybrid approaches) if needed (e.g., summary features + LSTM on sequences). 
+- LightGBM is often deployed first because it’s fast, robust, and interpretable, while the neural network is a v2 that might improve performance. 
+
+
+### Portfolio story
+- **LightGBM (v1)**: We started with patient-level aggregation to establish a baseline model that is interpretable and fast to train. This gives clinicians an overview of which vitals and risk patterns matter most.
+- **Neural Network (TCN)(v2)**: Once we had a solid baseline, we moved to a temporal convolutional network to directly learn time-dependent deterioration patterns from patient trajectories. This captures dynamics that aggregated features can’t.
+
+### Next Steps
+- Complete `make_patient_features.py`:  
+  3. Median imputation (patient-level, fallback to population).  
+  4. % missingness per vital.  
+  5. Risk encoding & summary stats (max, median, % time at High).  
+  6. Save `news2_features_patient.csv`.  
+- Then proceed to implement LightGBM baseline training (V1).  
+- Prepare timestamp features (already done) for TCN implementation (V2).  
+
+---
