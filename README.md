@@ -1,5 +1,10 @@
-# EWS-Predictive-Dashboard
-Python-based ICU Early Warning System (EWS) predictive dashboard. Uses time-series vitals to detect patient deterioration, benchmarked against NEWS2, with real-time alerts, trend visualisations, and a dual CLI/FastAPI interface. Portfolio-ready, deployed, and clinically-informed.
+# Neural Network Time-Series ICU Deterioration Predictor (LightGBM & PyTorch [TCN]) 📈📊 
+
+Python-based ICU deterioration predictor leveraging advanced time-series ML modeling using TCN Neural Network (PyTorch) on timestamp-level vitals and LightGBM on patient-level features, capturing temporal trends, missingness, and sequence dynamics. 
+
+Benchmarked against NEWS2, with real-time alerts and dual CLI/FastAPI deployment for real-time monitoring.
+
+Portfolio-ready, deployed, and clinically-informed.
 
 **Tech stack**: python, pandas, NumpPy, LightGBM, PyTorch
 
