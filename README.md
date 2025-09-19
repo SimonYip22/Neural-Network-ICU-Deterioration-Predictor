@@ -1,4 +1,4 @@
-# Neural Network Time-Series ICU Deterioration Predictor (LightGBM & PyTorch [TCN]) 📈📊 
+# Neural Network (TCN) Time-Series ICU Deterioration Predictor (LightGBM & PyTorch) 📈📊 
 
 Python-based ICU deterioration predictor leveraging advanced time-series ML modeling using TCN Neural Network (PyTorch) on timestamp-level vitals and LightGBM on patient-level features, capturing temporal trends, missingness, and sequence dynamics. 
 
