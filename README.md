@@ -108,7 +108,6 @@ LightGBM Model (v1)
 
  # Model Comparison: LightGBM vs Neural Network (V1 & V2)
 
-```text
 | Aspect | LightGBM (V1) | Temporal Convolutional Network (TCN) (V2) |
 |--------|-------------------|-------------------|
 | **ML Model Name / Type** | LightGBM (Gradient Boosted Decision Trees) | Temporal Convolutional Network (TCN)(Neural network) |
@@ -121,4 +120,3 @@ LightGBM Model (v1)
 | **Weaknesses / Limitations** | - Ignores sequence and timing of events.<br>- May lose some granularity of patient trajectory.<br>- Cannot capture interactions over time. | - Requires more computation and tuning.<br>- Harder to interpret.<br>- Sensitive to missing data; requires careful imputation or masking. |
 | **Output** | Predictions per patient, feature importances, evaluation metrics (AUROC, PR-AUC, etc.) | Predictions per timestamp or per patient trajectory, evaluation metrics (AUROC, PR-AUC, potentially time-dependent metrics) |
 | **Use case / Deployment** | Baseline model; interpretable; fast deployment; can be used for early warning systems using summary features | Advanced model for final deployment or v2 experimentation; may be integrated in real-time monitoring dashboards for continuous deterioration prediction |
-```
