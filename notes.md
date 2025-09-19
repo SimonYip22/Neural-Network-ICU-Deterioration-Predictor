@@ -198,6 +198,10 @@ Final NEWS2 scores per patient
 
 ---
 
+# Phase 2: Preprocess Data for ML-Models
+
+---
+
 ## Day 3 Notes — Validating NEWS2 Scoring & ML Pipeline Preparation
 
 ### Goals
@@ -711,5 +715,86 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
   6. Save `news2_features_patient.csv`.  
 - Then proceed to implement LightGBM baseline training (V1).  
 - Prepare timestamp features (already done) for TCN implementation (V2).  
+
+---
+
+## Day 8 Notes - Patient Pipeline Complete & LightGBM Roadmap Planning
+
+### Goals
+- Complete patient-level feature extraction (steps 3–6 in `make_patient_features.py`)
+- Verify the output (`news2_features_patient.csv`)
+- **Plan the next phase**: LightGBM training and validation
+
+### What We Did Today
+- Finished steps 3–6 in `make_patient_features.py`:
+  - Aggregated vital signs and NEWS2 scores to patient-level
+  - Calculated missing data percentages
+  - Generated additional derived features (e.g., `pct_time_high`)
+- Ran the feature extraction script successfully
+  - **Checked the resulting CSV**: `news2_features_patient.csv`
+  - Verified that all patient-level features were correctly calculated
+- Planned **Phase 3: LightGBM Training + Validation**:
+  - Drafted a high-level roadmap including dataset preparation, model initialisation, training, validation, saving, and documentation
+
+
+### Phase 3: LightGBM Training + Validation Overview
+**Goal:** Train a LightGBM model on patient-level features, validate performance, and document results.
+#### Step 1: Dataset Preparation
+- Load processed patient-level features
+- Split data into training and test sets
+- Separate features (X) and target labels (y)
+#### Step 2: Model Initialization
+- Initialize LightGBM model (classifier or regressor depending on target)
+- Define basic parameters (learning rate, number of trees, random seed)
+#### Step 3: Model Training
+- Fit the model on the training data
+- Monitor performance on test/validation set
+- Apply early stopping to prevent overfitting
+#### Step 4: Model Saving
+- Save trained model to a file for later use
+- Organize folder structure for reproducibility
+#### Step 5: Model Validation
+- Load saved model and run predictions on test set
+- Calculate evaluation metrics (accuracy, ROC-AUC, RMSE, etc.)
+- Optionally visualize feature importance and performance
+#### Step 6: Documentation
+- Record training and validation metrics
+- Summarize feature importances
+- Prepare results for portfolio or reporting
+#### Step 7: Debugging / Checks
+- Verify dataset shapes and target columns
+- Ensure feature consistency between training and test sets
+- Check for missing or non-numeric values
+
+### Reflections
+- **Good progress today**: patient-level feature pipeline is now complete and verified
+- Planning Phase 3 helps visualise the workflow and prevents getting stuck mid-training
+- Breaking down the steps into dataset preparation, training, validation, and documentation provides a clear roadmap
+
+
+### Challenges
+- Understanding **groupby operations** and **multi-indexing** in pandas
+  - Aggregating by `subject_id` while preserving patient-level information
+  - Converting multi-index back to a single index for merging and saving
+- **Merging dataframes**:
+  - Ensuring column names and indexes match for proper alignment
+  - Avoiding duplicate columns or misaligned patient IDs
+- Indexing and using `subject_id` as a key for all patient-level operations
+- Verifying formats and data types after aggregation to ensure downstream compatibility
+
+## Solutions and Learnings
+- Learned to carefully check pandas groupby objects and use `.reset_index()` after aggregation
+- Verified feature correctness by sampling output rows and comparing with original measurements
+- Documented the aggregation and merging workflow for reproducibility
+- Recognized the importance of consistent patient ID usage as a key across all transformations
+- Confirmed that the CSV output is clean and ready for modeling
+
+## Extras
+- **Reviewed potential pitfalls for Phase 3**:
+  - Handling missing values in LightGBM
+  - Feature scaling considerations
+  - Saving models with metadata (columns, feature order) for reproducibility
+- Drafted a markdown roadmap for Phase 3 to guide upcoming training and validation
+- Consider adding small unit tests for future pipeline stages to catch aggregation/merge errors early
 
 ---
