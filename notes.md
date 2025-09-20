@@ -858,17 +858,17 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
   - Document initial observations and notes for Phase 3
 
 ### Train/Test Split vs Cross-Validation
-**Initial plan:**  
+#### Initial plan  
 - Standard ML workflow uses a **train/test split** (e.g., 70/30 or 80/20).  
 - Training set is used to fit the model, test set evaluates generalisation.  
 - Works well when datasets are **large** (>10,000).  
 - With a big dataset, 20–30% for testing still leaves enough training data to learn robust patterns.  
-**Problem with our dataset:**  
+#### Problem with our dataset:  
 - We only have **100 patients** (100 rows after patient-level aggregation).  
 - A 70/30 split leaves 30 patients for testing; 80/20 leaves only 20.  
 - **This is too small**: metrics like AUROC or accuracy would fluctuate a lot if even 1–2 patients are misclassified.  
 - **Result**: unreliable, unstable performance estimates.  
-**Solution: Cross-Validation**  
+#### Solution: Cross-Validation
 - Instead of one split, we use **k-fold cross-validation**.  
 - **Process**:  
   1. Split patients into *k* equal groups (folds).  
@@ -876,14 +876,14 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
   3. Repeat *k* times, rotating which fold is used for testing.  
   4. Average performance across all folds → more stable estimate.  
 - Every patient is used for both training and testing (but never in the same round).  
-**Why 5-fold CV?**  
+#### Why 5-fold CV?
 - **k=5** is a common default:  
   - Balances computational efficiency with robustness.  
   - Each test fold has 20 patients → big improvement over a single 20-patient test set.  
   - Results averaged across 5 runs smooth out randomness.  
 - For very tiny datasets, k=10 can be used, but 5-fold is usually enough here.  
-**Decision:** 
-- Use **5-fold cross-validation** for LightGBM training/validation, and optionally hold out ~10 patients as a final untouched test set for a “real-world” check.  
+- **Decision:** 
+  - Use **5-fold cross-validation** for LightGBM training/validation, and optionally hold out ~10 patients as a final untouched test set for a “real-world” check.  
 
 ### How the model works
 - In supervised machine learning, the model learns a mapping from features (X) → target (y).
