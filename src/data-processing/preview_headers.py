@@ -1,4 +1,6 @@
-# previewing headers of various CSV files in the data directory so we have correct header titles for use in extract_news2_vitals.py
+# --------------------------------------------------------------------
+# Previewing headers of various CSV files in the data directory so we have correct header titles for use in extract_news2_vitals.py
+# --------------------------------------------------------------------
 
 import pandas as pd
 import os # gives access to operating system functions, like checking if a file exists before trying to read it.

@@ -1,5 +1,8 @@
-# helper/inspection script to check for CO2 retainers in chartevents
+# --------------------------------------------------------------------
+# Helper/inspection script
+# Check for CO2 retainers in chartevents.csv
 # extract_news2_vitals.py creates co2_retainer_details.csv, but this script independently verifies the logic and prints how many patients qualify
+# --------------------------------------------------------------------
 
 import pandas as pd
 

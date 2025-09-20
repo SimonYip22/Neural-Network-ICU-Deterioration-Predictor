@@ -739,29 +739,29 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
 
 ### Phase 3: LightGBM Training + Validation Overview
 **Goal:** Train a LightGBM model on patient-level features, validate performance, and document results.
-#### Step 1: Dataset Preparation
+**Step 1**: Dataset Preparation
 - Load processed patient-level features
 - Split data into training and test sets
 - Separate features (X) and target labels (y)
-#### Step 2: Model Initialization
-- Initialize LightGBM model (classifier or regressor depending on target)
+**Step 2**: Model Initialisation
+- Initialise LightGBM model (classifier or regressor depending on target)
 - Define basic parameters (learning rate, number of trees, random seed)
-#### Step 3: Model Training
+**Step 3**: Model Training
 - Fit the model on the training data
 - Monitor performance on test/validation set
 - Apply early stopping to prevent overfitting
-#### Step 4: Model Saving
+**Step 4**: Model Saving
 - Save trained model to a file for later use
 - Organize folder structure for reproducibility
-#### Step 5: Model Validation
+**Step 5**: Model Validation
 - Load saved model and run predictions on test set
 - Calculate evaluation metrics (accuracy, ROC-AUC, RMSE, etc.)
 - Optionally visualize feature importance and performance
-#### Step 6: Documentation
+**Step 6**: Documentation
 - Record training and validation metrics
-- Summarize feature importances
+- Summarise feature importances
 - Prepare results for portfolio or reporting
-#### Step 7: Debugging / Checks
+**Step 7**: Debugging / Checks
 - Verify dataset shapes and target columns
 - Ensure feature consistency between training and test sets
 - Check for missing or non-numeric values
@@ -782,14 +782,14 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
 - Indexing and using `subject_id` as a key for all patient-level operations
 - Verifying formats and data types after aggregation to ensure downstream compatibility
 
-## Solutions and Learnings
+### Solutions and Learnings
 - Learned to carefully check pandas groupby objects and use `.reset_index()` after aggregation
 - Verified feature correctness by sampling output rows and comparing with original measurements
 - Documented the aggregation and merging workflow for reproducibility
 - Recognized the importance of consistent patient ID usage as a key across all transformations
 - Confirmed that the CSV output is clean and ready for modeling
 
-## Extras
+### Extras
 - **Reviewed potential pitfalls for Phase 3**:
   - Handling missing values in LightGBM
   - Feature scaling considerations
@@ -798,3 +798,195 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
 - Consider adding small unit tests for future pipeline stages to catch aggregation/merge errors early
 
 ---
+
+## Day 9 Notes – 
+
+### Goal
+- Begin **Phase 3: LightGBM training and validation (steps 1-2)**
+- Focus on dataset preparation and initial model setup and checks, not full training yet
+- Ensure reproducibility from the start
+- Make notes on potential challenges for full training and validation
+
+### What We Did
+1. **Step 1: Dataset Preparation**
+  - Create `src/ml-data-prep/train_lightgbm_prep,py`
+  - Load `news2_features_patient.csv` into file.
+  - **Identify the target variables**:
+    - `max_risk` → “Did this patient ever escalate to severe deterioration?” (binary/ordinal classifier style) → classifier model (ordinal: 0–3).
+    - `median_risk` → “What was this patient’s typical level of deterioration?” (long-term trajectory classifier) → classifier model (ordinal: 0–3).
+    - `pct_time_high` → “How much of the patient’s stay was spent at critical risk?” (continuous regression, severity burden) → regressor (continuous: 0–1).
+  - **Decided on looping automation code**: so that each target gets its own trained model and results, and we do not need to manually code 3 almost-identical training runs.
+  - **5-fold cross-validation (CV) due to small data size (100 patients)**:
+    - 5 equal groups of 20 patients, train on 4 groups, test on remaining 1 group
+    - Repeat 5 times, rotating which group is used for testing
+    - Average performance across all groups is a more stable estimate vs a standard train/test split (e.g. 70/30 or 80/20).
+  - **Separate features (`X`) from the target (`y`)**:
+    - X = Features (inputs) → everything the model uses to make predictions (hr_mean, spo2_min, temperature_max, %missing, etc.).
+    - y = Target (outputs) → the “answer key” you want the model to learn to predict (e.g., max_risk).
+    - During training, the model learns a mapping from X → y.
+      - X_train = inputs for training (DataFrame of row = 80 training patients × column = all features)
+      - y_train = labels for training (Series of row = 80 training patients x values = their risk labels)
+      - X_test = inputs to evaluate model (DataFrame of row = 20 test patients × column = all features)
+      - y_test = labels to compare predictions (Series of row = 20 test patients x values = their risk labels)
+  - **Check data types and missing values**: 
+    - Ensure all features are numeric and compatible with LightGBM (LightGBM quite forgiving, can handle some NaNs internally).
+    - Although our preprocessing should have fixed this (imputed NaNs, encoded categorical risk as numeric, dropped non-numerics), always double check before model training.
+    - We need safety check as sometimes merges sneak in NaNs, sometimes column types are wrong.
+    - If something unexpected pops up, better to catch it before fitting LightGBM.
+2. **Step 2: Model Initialisation Setup**
+  - Import LightGBM
+  - **Initialise a basic LightGBM model**:
+    - Use default parameters for first run
+    - Define baseline parameters (learning rate, trees, seed). Specify random seed for reproducibility
+  - Create both classifier (for max_risk, median_risk) and regressor (for pct_time_high).
+3. **Quick Test Run**:
+  - Dont need to do a full training loop yet.
+  - **Fit the model on a small subset of training data (10 patients) to**:
+    - Verify that the pipeline works
+    - Check that data formats, shapes, and types are correct (features (X) are numeric, targets (y) are the right shape)
+    - Catch any errors with feature alignment or missing values
+  - This catches pipeline errors before we spend time coding full CV training tomorrow.
+4. **Logging and Documentation**:
+  - Record:
+    - Dataset shapes (rows, columns)
+    - Features used
+    - Any issues encountered (e.g., unexpected NaNs, strange distributions)
+  - Document initial observations and notes for Phase 3
+5. **Extra**:
+  - Prepare a skeleton `train_lightgbm.py` file with placeholders for parameters and saving models.
+
+### Train/Test Split vs Cross-Validation
+**Initial plan:**  
+- Standard ML workflow uses a **train/test split** (e.g., 70/30 or 80/20).  
+- Training set is used to fit the model, test set evaluates generalisation.  
+- Works well when datasets are **large** (>10,000).  
+- With a big dataset, 20–30% for testing still leaves enough training data to learn robust patterns.  
+**Problem with our dataset:**  
+- We only have **100 patients** (100 rows after patient-level aggregation).  
+- A 70/30 split leaves 30 patients for testing; 80/20 leaves only 20.  
+- **This is too small**: metrics like AUROC or accuracy would fluctuate a lot if even 1–2 patients are misclassified.  
+- **Result**: unreliable, unstable performance estimates.  
+**Solution: Cross-Validation**  
+- Instead of one split, we use **k-fold cross-validation**.  
+- **Process**:  
+  1. Split patients into *k* equal groups (folds).  
+  2. Train on *k–1* folds, test on the remaining fold.  
+  3. Repeat *k* times, rotating which fold is used for testing.  
+  4. Average performance across all folds → more stable estimate.  
+- Every patient is used for both training and testing (but never in the same round).  
+**Why 5-fold CV?**  
+- **k=5** is a common default:  
+  - Balances computational efficiency with robustness.  
+  - Each test fold has 20 patients → big improvement over a single 20-patient test set.  
+  - Results averaged across 5 runs smooth out randomness.  
+- For very tiny datasets, k=10 can be used, but 5-fold is usually enough here.  
+**Decision:** 
+- Use **5-fold cross-validation** for LightGBM training/validation, and optionally hold out ~10 patients as a final untouched test set for a “real-world” check.  
+
+### How the model works
+- In supervised machine learning, the model learns a mapping from features (X) → target (y).
+- Features (X) = things you give the model as input (heart rate, SpO2, temperature, missingness, etc.)
+- Target (y) = the thing you want the model to predict (e.g. max_risk).
+- Even though max_risk is already known, the model uses it as the “answer key” during training:
+
+```text
+Input features (X) → Model → Predict max_risk
+Compare predicted max_risk vs actual max_risk → Adjust model
+```
+
+- During training, the model compares its predictions to the real max_risk values and adjusts weights to minimise errors.
+- Without max_risk (or whatever target), the model cannot learn, because it has nothing to compare its predictions to.
+
+confused about how the model works, why we need X and Y and how the model uses it. confused about the 5 cross VC code logic, and KFold logic (	•	KFold does stratified rotation: each patient is assigned to exactly one fold, so no patient is ever skipped.
+	•	Over the 5 folds, each patient will be in the test set once and in the training set 4 times.), KFold.split() is a generator confused about how it internally works with the indices for each iteration which one is test and which one is train 
+
+  confused about seperating x and y and how they each have a test and training split (4)
+  	•	X_train = inputs for training
+	•	y_train = labels for training
+	•	X_test = inputs to evaluate model
+	•	y_test = labels to compare predictions
+
+
+### KFold logic diagram (100 patients, 5 folds)
+
+```python
+100 patients numbered 0–99.
+
+Step 1: Shuffle patients (random order)
+Shuffled indices: 23, 45, 12, 7, 56, ... , 99  (total 100)
+
+Step 2: Split into 5 folds (20 patients each)
+100 patients → 5 folds (20 patients each)
+
+Fold 1: 23, 45, 12, ..., 78        (test fold for iteration 1)
+Fold 2: 7, 56, 34, ..., 81         (test fold for iteration 2)
+Fold 3: ...
+Fold 4: ...
+Fold 5: ...
+
+Step 3: Loop through folds
+
+Iteration 1 (fold_idx=1)
+------------------------
+Train folds = 2,3,4,5 → 80 patients
+Test fold  = 1         → 20 patients
+
+X_train = features for patients in folds 2–5 (80×num_features)
+y_train = labels   for patients in folds 2–5 (80×1)
+
+X_test  = features for patients in fold 1 (20×num_features)
+y_test  = labels   for patients in fold 1 (20×1)
+
+Iteration 2 (fold_idx=2)
+------------------------
+Train folds = 1,3,4,5 → 80 patients
+Test fold  = 2         → 20 patients
+
+X_train = features for patients in folds 1,3,4,5
+y_train = labels   for patients in folds 1,3,4,5
+
+X_test  = features for patients in fold 2
+y_test  = labels   for patients in fold 2
+
+Iteration 3 (fold_idx=3)
+------------------------
+Train folds = 1,2,4,5 → 80 patients
+Test fold  = 3         → 20 patients
+
+X_train = features for patients in folds 1,2,4,5
+y_train = labels   for patients in folds 1,2,4,5
+
+X_test  = features for patients in fold 3
+y_test  = labels   for patients in fold 3
+
+Iteration 4 (fold_idx=4)
+------------------------
+Train folds = 1,2,3,5 → 80 patients
+Test fold  = 4         → 20 patients
+
+X_train = features for patients in folds 1,2,3,5
+y_train = labels   for patients in folds 1,2,3,5
+
+X_test  = features for patients in fold 4
+y_test  = labels   for patients in fold 4
+
+Iteration 5 (fold_idx=5)
+------------------------
+Train folds = 1,2,3,4 → 80 patients
+Test fold  = 5         → 20 patients
+
+X_train = features for patients in folds 1,2,3,4
+y_train = labels   for patients in folds 1,2,3,4
+
+X_test  = features for patients in fold 5
+y_test  = labels   for patients in fold 5
+```
+
+### Dataset Preparation Output (`prepare_patient_dataset.py`)
+	•	✅ Your dataset loaded correctly → shape (100, 44) → 100 patients, 44 columns.
+	•	✅ All columns are numeric (float64 / int64) except two (co2_retainer_min and co2_retainer_max, which are bool but still compatible with LightGBM).
+	•	✅ No missing values left — preprocessing worked properly.
+	•	✅ For each target (max_risk, median_risk, pct_time_high):
+	•	The dataset is being split into 5 folds.
+	•	Each fold shows the correct sizes: Train shape (80, 40), Test shape (20, 40) → 80 patients for training, 20 for testing, 40 features in X.
+	•	✅ The loop cycles through all 3 targets automatically, so your pipeline is flexible and future-proof.
