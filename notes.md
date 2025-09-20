@@ -799,9 +799,9 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
 
 ---
 
-## Day 9 Notes – 
+## Day 9 Notes – Patient Dataset Preparation for LightGBM
 
-### Goal
+### Goals
 - Begin **Phase 3: LightGBM training and validation (steps 1-2)**
 - Focus on dataset preparation and initial model setup and checks, not full training yet
 - Ensure reproducibility from the start
@@ -835,25 +835,27 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
     - If something unexpected pops up, better to catch it before fitting LightGBM.
 2. **Step 2: Model Initialisation Setup**
   - Import LightGBM
-  - **Initialise a basic LightGBM model**:
-    - Use default parameters for first run
-    - Define baseline parameters (learning rate, trees, seed). Specify random seed for reproducibility
-  - Create both classifier (for max_risk, median_risk) and regressor (for pct_time_high).
+  - **Initialise a basic LightGBM model (`train_lightgbm.py`)**
+    - Create both classifier (for max_risk, median_risk) and regressor (for pct_time_high).
+      - `LGBMClassifier` for max_risk & median_risk
+      - `LGBMRegressor` for pct_time_high
+    - Set `random_state=42` for reproducibility
+  - Skip cross-validation entirely because we aren’t evaluating performance yet, and dataset is too small.
 3. **Quick Test Run**:
   - Dont need to do a full training loop yet.
   - **Fit the model on a small subset of training data (10 patients) to**:
     - Verify that the pipeline works
     - Check that data formats, shapes, and types are correct (features (X) are numeric, targets (y) are the right shape)
     - Catch any errors with feature alignment or missing values
+    - Predictions are generated
+  - Ensured that the loop works for all 3 targets automatically
   - This catches pipeline errors before we spend time coding full CV training tomorrow.
 4. **Logging and Documentation**:
-  - Record:
+  - Recorded:
     - Dataset shapes (rows, columns)
     - Features used
-    - Any issues encountered (e.g., unexpected NaNs, strange distributions)
+    - Any issues encountered (e.g., unexpected NaNs, strange distributions) - none major
   - Document initial observations and notes for Phase 3
-5. **Extra**:
-  - Prepare a skeleton `train_lightgbm.py` file with placeholders for parameters and saving models.
 
 ### Train/Test Split vs Cross-Validation
 **Initial plan:**  
@@ -896,16 +898,6 @@ Compare predicted max_risk vs actual max_risk → Adjust model
 
 - During training, the model compares its predictions to the real max_risk values and adjusts weights to minimise errors.
 - Without max_risk (or whatever target), the model cannot learn, because it has nothing to compare its predictions to.
-
-confused about how the model works, why we need X and Y and how the model uses it. confused about the 5 cross VC code logic, and KFold logic (	•	KFold does stratified rotation: each patient is assigned to exactly one fold, so no patient is ever skipped.
-	•	Over the 5 folds, each patient will be in the test set once and in the training set 4 times.), KFold.split() is a generator confused about how it internally works with the indices for each iteration which one is test and which one is train 
-
-  confused about seperating x and y and how they each have a test and training split (4)
-  	•	X_train = inputs for training
-	•	y_train = labels for training
-	•	X_test = inputs to evaluate model
-	•	y_test = labels to compare predictions
-
 
 ### KFold logic diagram (100 patients, 5 folds)
 
@@ -983,10 +975,84 @@ y_test  = labels   for patients in fold 5
 ```
 
 ### Dataset Preparation Output (`prepare_patient_dataset.py`)
-	•	✅ Your dataset loaded correctly → shape (100, 44) → 100 patients, 44 columns.
-	•	✅ All columns are numeric (float64 / int64) except two (co2_retainer_min and co2_retainer_max, which are bool but still compatible with LightGBM).
-	•	✅ No missing values left — preprocessing worked properly.
-	•	✅ For each target (max_risk, median_risk, pct_time_high):
-	•	The dataset is being split into 5 folds.
-	•	Each fold shows the correct sizes: Train shape (80, 40), Test shape (20, 40) → 80 patients for training, 20 for testing, 40 features in X.
-	•	✅ The loop cycles through all 3 targets automatically, so your pipeline is flexible and future-proof.
+- Dataset loaded correctly → shape (100, 44) → 100 patients, 44 columns.
+- All columns are numeric (float64 / int64) except two (co2_retainer_min and co2_retainer_max, which are bool but still compatible with LightGBM).
+- No missing values left — preprocessing worked properly.
+- For each target (max_risk, median_risk, pct_time_high):
+- The dataset is being split into 5 folds.
+- **Each fold shows the correct sizes**: Train shape (80, 40), Test shape (20, 40) → 80 patients for training, 20 for testing, 40 features in X.
+- The loop cycles through all 3 targets automatically, so pipeline is flexible and future-proof.
+- The dataset is fully prepared, the cross-validation setup works perfectly.
+- Now have X_train, y_train, X_test, y_test ready for model training in the next step.
+
+### Model Initialisation & Test Run Output (`train_lightgbm.py`)
+- Quick LightGBM test on 10 patients completed
+- Dataset loads correctly → shape (100, 44)
+- Feature selection works → X has all numeric features except target columns and subject_id.
+- Target separation works → y is selected for each loop.
+- Models (classifier/regressor) fit without crashing.
+- Predictions generated → pipeline is complete.
+- Warnings about “no meaningful features” expected for tiny dataset; safe to ignore
+
+### Reflections
+- **Understanding supervised learning**: why X and y are separated, how model uses y as “answer key”
+- **KFold confusion**: 
+  - Generator yields train/test indices automatically
+  - Each fold becomes the test set exactly once
+  - Each patient appears in training 4 times, testing 1 time
+- **Shapes and data types**:
+  - Verified X_train, X_test, y_train, y_test
+  - Ensured numeric features only
+- **Terminal and file path management**:
+  - Learned to handle relative vs absolute paths
+  - Used `pathlib.Path(__file__).resolve().parent` for dynamic CSV path
+
+### Reflections
+#### Challenges
+- **Understanding X and y separation**
+  - Confused why both X (features) and y (target) are needed when the target is already known.
+- **KFold logic and cross-validation**
+  - Confused how `KFold.split(X)` automatically generates `train_index` and `test_index`.
+  - Unsure how each iteration selects a different fold for testing and uses the remaining folds for training.
+  - Did not initially understand why `fold_idx` starts at 1 and how it corresponds to the test fold.
+  - Hard to visualise how all 100 patients are rotated through the 5 folds.
+- **Handling X_train, X_test, y_train, y_test**
+  - Unclear why there are four separate objects and what each represents in cross-validation.
+- **Directory structure and relative paths**
+  - Confused why `../../` worked in some scripts but not others, and where the CSV should be located relative to each script.
+#### Solutions & Learnings
+- **X and y separation**
+  - Reviewed supervised learning: X = input features, y = labels/“answer key”.
+  - **Insight:** Model requires y to compute loss and adjust weights; without it, training cannot proceed.
+- **KFold `.split()` logic**
+  - Learned that `.split()` is a generator which, for each iteration:
+    1. Assigns one fold as `test_index`.
+    2. Automatically uses all remaining folds as `train_index`.
+  - Created a diagram mapping 100 patients → 5 folds → train/test sets per iteration.
+  - **Insight:** Ensures each patient appears in the test set exactly once across folds, giving full coverage and stable performance estimates.
+- **Fold indexing (`fold_idx`)**
+  - Serves as a counter for current iteration; tracks which fold is the test fold.
+  - **Insight:** Facilitates debugging, logging, and fold-specific analysis.
+- **X/y training/test objects**
+  - Verified that `X_train`/`y_train` contain features and labels for training folds, `X_test`/`y_test` for the test fold.
+  - Checked shapes and sample rows to confirm correctness.
+  - **Insight:** Clearly defines what data the model sees during training vs evaluation.
+- **Quick visualisation**
+  - Diagrammed how `.iloc[train_index]` and `.iloc[test_index]` select the correct rows.
+  - **Insight:** Makes cross-validation logic intuitive; reinforces the necessity of looping through folds for small datasets.
+- **Directory paths**
+  - Used `pathlib.Path(__file__).resolve().parent` to dynamically build paths.
+  - **Insight:** Avoids path errors, ensures reproducibility regardless of script location.
+
+### Overall
+- Gained confidence in preparing datasets, setting up cross-validation, and creating reproducible ML workflows.
+- Pipeline is now robust for looping through all three target variables, ready for full training in the next phase.
+
+### Next Steps
+- Implement **full 5-fold CV training on all 100 patients**
+- Save trained models and CV results
+- Calculate evaluation metrics (accuracy, ROC-AUC, RMSE, etc.)
+- Start exploring **feature importance** and preliminary model interpretation
+- Extend pipeline to loop automatically for all targets and optionally timestamp-level features in parallel
+
+---
