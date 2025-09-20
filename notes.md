@@ -995,19 +995,6 @@ y_test  = labels   for patients in fold 5
 - Warnings about “no meaningful features” expected for tiny dataset; safe to ignore
 
 ### Reflections
-- **Understanding supervised learning**: why X and y are separated, how model uses y as “answer key”
-- **KFold confusion**: 
-  - Generator yields train/test indices automatically
-  - Each fold becomes the test set exactly once
-  - Each patient appears in training 4 times, testing 1 time
-- **Shapes and data types**:
-  - Verified X_train, X_test, y_train, y_test
-  - Ensured numeric features only
-- **Terminal and file path management**:
-  - Learned to handle relative vs absolute paths
-  - Used `pathlib.Path(__file__).resolve().parent` for dynamic CSV path
-
-### Reflections
 #### Challenges
 - **Understanding X and y separation**
   - Confused why both X (features) and y (target) are needed when the target is already known.
