@@ -1106,9 +1106,9 @@ This makes LightGBM phase complete, credible, and deployment-worthy without unne
 #### 1. **Mean Squared Error (MSE)**
 - **Type:** Regression metric (continuous outcomes).
 - **Definition:**  
-$$
-\text{MSE} = \frac{1}{n} \sum_{i=1}^{n} (y_i - \hat{y}_i)^2
-$$
+```text
+MSE = (1/n) * Σ (y_i - ŷ_i)^2
+```
 - **What it measures:**  
   - The *average squared difference* between predictions and actuals.  
   - Penalises large errors much more heavily than small ones (because of the square).  
@@ -1122,9 +1122,9 @@ $$
 #### 2. **Accuracy**
 - **Type:** Classification metric (discrete categories).  
 - **Definition:**  
-$$
-\text{Accuracy} = \frac{\text{# correct predictions}}{\text{total # predictions}}
-$$
+```text
+Accuracy = (# correct predictions) / (total # predictions)
+```
 - **What it measures:**  
   - The proportion of predictions that are exactly correct.  
 - **How it evaluates:**  
@@ -1169,12 +1169,34 @@ $$
 - Fall back to **accuracy** only when a fold has a single class (so ROC-AUC is undefined).  
 
 
+
 ### What we did 
-`complete_train_lightgbm.py`
+**Model Training `complete_train_lightgbm.py`**
  - sets up a loop for each target variable, selects the appropriate model type and metric, and prepares a list to store the results from cross-validation folds. It’s the first step in a modular, reusable training pipeline.
+**Model Saving**
+**Model Validation**
+**Documentation**
+**Model Outputs `src/models-lightgbm/saved_models/`**
+1. 15 trained models (.pkl) → 5 folds × 3 targets
+2. 3 per-target CV result CSVs (*_cv_results.csv) → one per target
+3. 15 feature importance CSVs (*_fold{fold_idx}_feature_importance.csv) → one per fold per target
+4. 1 training summary text file (training_summary.txt) → cumulative summary for all targets
+completed the full baseline LightGBM training and evaluation pipeline. Step 8 will be more interpretation and polish, rather than writing new code.
+
+can you explain why each output is necessary and what it shows 
+- Saved fold-wise trained models
+- Fold-wise scores per target
+- Top features per fold per target
+- Overall summary of dataset shape, mean CV score, top features per target
+
+### How Gradient Boosted Decision Tree Model Works
+-	Trees split on feature thresholds.
+-	Each split improves the model’s predictions.
+-	Feature importance = how often (or how much) the model used each feature to reduce errors.
 
 
 
+### Reflection
 confused about this:
 No – each saved LightGBM model file doesn’t store the X and y data. It only stores the trained model itself:
 	•	The model contains all the information LightGBM learned from training on the X and y for that fold (splits, leaf values, weights, etc.).
@@ -1286,3 +1308,130 @@ Step 2: Do we combine them into one model?
 	•	They are not combined; their scores are averaged.
 	•	Afterwards, you usually train 1 final model per outcome on all the data.
 	•	So you’ll finish with evaluation results (from 15 models) and 3 final models for deployment.
+
+This happened during running teh script
+You are doing 5-fold CV.
+	•	In one training fold, maybe all patients had class 1 (so the model only knows about label 1).
+	•	But in the validation fold, a patient had label 0.
+	•	When LightGBM tried to evaluate, it crashed: “I never saw label 0 before”.
+
+👉 The core problem is some folds don’t include all classes (0 and 1).
+
+2️⃣ Why StratifiedKFold fixes this
+
+StratifiedKFold is like KFold, but it preserves the proportion of each class in every split.
+	•	Example: if your dataset has 60% class 0 and 40% class 1,
+	•	KFold might randomly put all 0s in training and all 1s in validation (bad).
+	•	StratifiedKFold guarantees each fold will have ~60% 0 and ~40% 1 (good).
+
+This way, every train and validation split has both labels, and LightGBM won’t crash.
+
+For pct_time_high, it’s not labels at all — it’s continuous numbers (percentages).
+So here, we don’t worry about label 0/1. That’s why we keep normal KFold.
+
+1. The StratifiedKFold error
+TypeError: StratifiedKFold.split() missing 1 required positional argument: 'y'
+Why?
+	•	KFold.split() → only needs X.
+	•	StratifiedKFold.split() → requires both X and y (because it must check the class distribution).
+
+ValueError: y contains previously unseen labels: [np.int64(0)]
+	•	StratifiedKFold ≠ guaranteed both labels in every training fold.
+	•	It just balances proportions as much as possible.
+	•	Small / imbalanced dataset = folds without both classes.
+That’s why we need to force LightGBM to know both labels ([0,1]) up front, even if one is absent in the current fold.
+
+What this tells us about the dataset
+	•	It’s small and likely imbalanced.
+	•	For some classification tasks, there might be too few patients in one category.
+	•	This makes cross-validation more fragile → you get folds where one class vanishes.
+
+This doesn’t mean the dataset is “bad”, but it does mean:
+	1.	The classification problems (max_risk, median_risk) may not be very strong candidates unless you handle imbalance carefully.
+	2.	Metrics like ROC-AUC will be noisy / unstable with such small test folds.
+	3.	We’ll need to explicitly help LightGBM understand both classes exist (with classes=[0,1]) and maybe consider different CV strategies (like fewer folds or stratify with caution).
+
+In scikit-learn models you can pass class_weight="balanced" to fit().
+in LightGBM’s sklearn API, class_weight is a parameter of the constructor, not the .fit() method.
+Move class_weight="balanced" into the model constructor.
+
+UserWarning: The least populated class in y has only 1 members, which is less than n_splits=5.
+tells us that in your dataset:
+	•	For max_risk, one of the labels (0 or 1) appears only once across all 100 patients.
+	•	For median_risk, distribution might also be very imbalanced (e.g., 95 patients in class 0, 5 patients in class 1).
+
+So when StratifiedKFold tries to split into 5 folds, it cannot distribute that single positive case evenly → some folds have none.
+
+4. What this means for your targets
+	•	max_risk: basically broken. If only 1 patient is “at max risk”, the model cannot learn anything useful (it just predicts 0 all the time).
+	•	median_risk: maybe slightly better (a handful of positives), but still very skewed.
+
+So in effect, both targets are almost all class 0 → models will be very biased and unstable.
+
+Why it’s unusable
+	1.	Extreme class imbalance
+	•	You mentioned one class may have only 1 patient.
+	•	With 5-fold CV, many folds end up with zero examples of the minority class.
+	•	ROC-AUC or any meaningful classification metric cannot be computed if a fold has only one class.
+	2.	Data sparsity
+	•	The model cannot learn patterns from a single positive example.
+	•	Even if you reduce folds to 2–3, the minority class is still too rare for reliable training.
+	3.	Metrics are meaningless
+	•	Fold scores like 0.5 are just random guessing, not informative.
+	•	Any feature importance will also be unstable and unreliable.
+
+The code is fine, the problem is data sparsity. No LightGBM argument will fix it. You either have to reduce folds, oversample, or accept that classification for these targets isn’t feasible with your dataset.
+
+
+	1.	Skip classification for max_risk and median_risk
+	•	Focus on pct_time_high regression, which works fine.
+	•	You can still demonstrate your LightGBM pipeline and CV procedure.
+
+
+### Choice of targets
+max_risk and median_risk were problematic because:
+	•	They are binary/ordinal variables with extremely few positive cases.
+	•	LightGBM (and any CV method) requires a minimum number of samples per class to meaningfully train and evaluate.
+What you could have done:
+	1.	Inspect dataset first
+	•	Check class distributions (df['max_risk'].value_counts() etc.) before choosing targets.
+	•	If the minority class is tiny (1–2 samples), CV will fail.
+	2.	Select better targets
+	•	For classification, choose variables with enough samples in each class (at least 5–10 per class for a small dataset).
+	•	Or use regression targets where sample size is adequate.
+	3.	Document your reasoning
+	•	Even if you pick a poor target, explain why it fails and why you skipped it. This demonstrates critical thinking and understanding of ML limitations.
+
+### Overall 
+	•	Built a fully reproducible LightGBM pipeline.
+	•	Implemented CV, early stopping, feature importance logging.
+	•	Learned about why small/imbalanced datasets break classification, which is valuable knowledge for any real-world ML project.
+  - need to adjust the targets you report on. Many published ML projects run into exactly this issue — small or imbalanced datasets are extremely common in healthcare.
+
+Add a note in your documentation explaining why max_risk and median_risk could not be used — this actually shows good scientific reasoning.
+	•	In your report or documentation:
+	•	Explain the dataset limitation (rare positive examples).
+	•	Show that your pipeline is robust for the regression target.
+	•	Optionally, describe how classification would work if data were sufficient (the methodology).
+
+“Originally, max_risk and median_risk were considered for classification. These targets had too few positive cases, so CV and training were unreliable. Therefore, only pct_time_high regression was used.”
+
+4. Metrics and pipelines don’t reveal it until runtime
+	•	Accuracy or ROC-AUC will fail only when a fold is completely missing a class, which is exactly what happened.
+	•	Static checks (like looking at column summaries) cannot guarantee every fold has sufficient data — this only manifests during CV.
+
+Lessons learned
+	•	Always check the class balance for classification tasks before deciding on CV splits.
+	•	Rare binary/ordinal targets may require:
+	•	Reducing n_splits (so each fold has at least one positive case).
+	•	Oversampling / SMOTE for rare classes.
+	•	Or deciding not to train that target at all (as in your case).
+	•	In portfolio or reproducible pipelines, it’s perfectly acceptable to document why some targets are unusable.
+
+
+
+### Plan for Tomorrow (Day 11)
+**Step 8**:
+- **Hyperparameter tuning**: adjust learning rate, tree depth, and number of trees.
+- **Feature importance interpretation**: explain clinically relevant drivers.
+- Notes will include how feature importance is calculated and how the model works conceptually (splits, boosting, gradient contribution).
