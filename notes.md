@@ -799,6 +799,10 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
 
 ---
 
+# Phase 3: LightGBM Training + Validation 
+
+---
+
 ## Day 9 Notes – Patient Dataset Preparation for LightGBM
 
 ### Goals
@@ -836,10 +840,11 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
 2. **Step 2: Model Initialisation Setup**
   - Import LightGBM
   - **Initialise a basic LightGBM model (`train_lightgbm.py`)**
+    - Used LightGBM default parameters (learning rate, depth, number of trees, etc.)
     - Create both classifier (for max_risk, median_risk) and regressor (for pct_time_high).
       - `LGBMClassifier` for max_risk & median_risk
       - `LGBMRegressor` for pct_time_high
-    - Set `random_state=42` for reproducibility
+    - Set the seed `random_state=42` for reproducibility.
   - Skip cross-validation entirely because we aren’t evaluating performance yet, and dataset is too small.
 3. **Quick Test Run**:
   - Dont need to do a full training loop yet.
@@ -1043,3 +1048,242 @@ y_test  = labels   for patients in fold 5
 - Extend pipeline to loop automatically for all targets and optionally timestamp-level features in parallel
 
 ---
+
+## Day 10 Notes 
+
+### Phase 3: LightGBM Training + Validation (Steps 1–8) Finalised 
+**Goal: Train, validate, and document a LightGBM model on patient-level features, producing a polished, credible baseline.**
+1. **Dataset Preparation**
+  - Load processed patient-level features.
+  - Separate features (X) and targets (y).
+  - Verify datatypes, shapes, and missing values.
+2. **Model Initialisation**
+  - Initialise LGBMClassifier (max_risk, median_risk) or LGBMRegressor (pct_time_high).
+  - Define baseline parameters and set random seed.
+3. **Model Training**
+  - Fit model on training folds with early stopping.
+  - Monitor performance on validation folds.
+4. **Model Saving**
+  - Save trained models and results for reproducibility.
+  - 3 outcomes x 5 folds = 15 models.
+5. **Model Validation**
+  - Load saved models, run predictions.
+  - Compute metrics (accuracy, ROC-AUC, RMSE).
+  - Visualise feature importance and results.
+6. **Documentation**
+  - Record metrics, shapes, and key outputs.
+  - Summarise feature importances for interpretability.
+7. **Debugging / Checks**
+  - Verify dataset consistency across folds.
+  - Ensure features align between training and test sets.
+8. **Hyperparameter Tuning + Feature Importance**
+  - Tune key parameters (learning rate, depth, trees) for fair performance.
+  - Analyse feature importance to explain clinical drivers of prediction.
+  - Produces a polished, interpretable, portfolio-ready baseline.
+9. **Final Model Training (Deployment-Style Models)**
+	-	After validation, train a final single model per target (3 total) on all 100 patients.
+	-	**Purpose**:
+    - Produces the best possible trained model using all available data.
+    -	**Matches real-world practice**: once validated, you don’t throw away data — you train on the full cohort.
+    -	Gives you 3 final models you can save, reload, and demonstrate (classifier + regressor).
+This makes LightGBM phase complete, credible, and deployment-worthy without unnecessary over-optimisation.
+**Why Not Go Further**
+- **Ensembling (stacking, blending, bagging multiple LightGBM models)**: adds complexity without new insights → not unique for a portfolio.
+- **Nested CV**: more statistically rigorous, but overkill for 100 patients; doesn’t change credibility.
+- **Bayesian optimisation / AutoML**: looks flashy, but to recruiters it signals you know how to use a library, not that you understand the fundamentals.
+- **Overfitting risk**: with 100 patients, “chasing” tiny gains just makes results unstable and less reproducible.
+- **Time sink**: delays me getting to Neural Nets (the unique, impressive part of your project).
+
+### Purpose of Baseline Classical LightGBM ML Model
+1. Show I can prepare patient-level data for ML.
+2. Provides a baseline classical ML benchmark for patient deterioration prediction.
+3. Demonstrates an end-to-end ML workflow, and a credible, well-structured pipeline (data prep → CV → training → saving → validation → documentation → final deployment models).
+4. Ensures reproducibility and robustness with cross-validation, and deployment readiness (final models).
+5. Adds interpretability through feature importance, crucial in clinical healthcare settings.
+6. Establishes a strong baseline Performance benchmark for later comparison with Neural Networks, showing their added value.
+
+### Evaluation Metrics: MSE vs ROC-AUC vs Accuracy  
+#### 1. **Mean Squared Error (MSE)**
+- **Type:** Regression metric (continuous outcomes).
+- **Definition:**  
+  \[
+  \text{MSE} = \frac{1}{n} \sum_{i=1}^{n} (y_i - \hat{y}_i)^2
+  \]  
+  where \(y_i\) = true value, \(\hat{y}_i\) = predicted value.  
+- **What it measures:**  
+  - The *average squared difference* between predictions and actuals.  
+  - Penalises large errors much more heavily than small ones (because of the square).  
+- **How it evaluates:**  
+  - Lower MSE = better fit.  
+  - Perfect model → MSE = 0.  
+- **Use case:**  
+  - Regression tasks (e.g., predicting %time_high for a patient).  
+  - Good when you care about magnitude of errors.  
+
+#### 2. **Accuracy**
+- **Type:** Classification metric (discrete categories).  
+- **Definition:**  
+  \[
+  \text{Accuracy} = \frac{\text{# correct predictions}}{\text{total # predictions}}
+  \]  
+- **What it measures:**  
+  - The proportion of predictions that are exactly correct.  
+- **How it evaluates:**  
+  - 0–1 range (or %).  
+  - Example: if model got 85 out of 100 patients’ classes right → accuracy = 0.85.  
+- **Limitations:**  
+  - Misleading for *imbalanced datasets*.  
+    - If 95% of patients are “low risk”, a dumb model that predicts “low risk” for everyone gets 95% accuracy, but is useless.  
+- **Use case:**  
+  - Quick baseline check for balanced classification problems.  
+  - Less informative when classes are skewed.  
+
+#### 3. **ROC-AUC (Receiver Operating Characteristic – Area Under Curve)**
+- **Type:** Classification metric (binary or multiclass with extensions).  
+- **Definition:**  
+  - Plots **True Positive Rate (Sensitivity)** vs **False Positive Rate (1 – Specificity)** at different thresholds.  
+  - AUC = area under that ROC curve (0–1).  
+- **What it measures:**  
+  - **Discrimination ability**: how well the model separates positive from negative classes.  
+  - AUC = probability that the model assigns a higher score to a randomly chosen positive case than to a randomly chosen negative case.  
+- **How it evaluates:**  
+  - 0.5 = no better than random guessing.  
+  - 1.0 = perfect discrimination.  
+- **Strengths:**  
+  - Works well even when classes are imbalanced.  
+  - Evaluates the **ranking of predictions**, not just “hard” class labels.  
+- **Use case:**  
+  - Preferred metric for classifiers when outcomes are rare (e.g., detecting deteriorating patients).  
+  - More informative than accuracy in medicine because it accounts for both sensitivity and specificity across thresholds.  
+
+#### Summary Table
+
+| Metric      | Task Type       | Range      | Goal   | Strengths                                   | Weaknesses |
+|-------------|-----------------|------------|--------|---------------------------------------------|-------------|
+| **MSE**     | Regression      | [0, ∞)     | Lower  | Penalises big errors; sensitive to scale.   | Hard to interpret clinically (units²). |
+| **Accuracy**| Classification  | [0,1]      | Higher | Simple, intuitive.                          | Misleading with imbalanced data. |
+| **ROC-AUC** | Classification  | [0.5,1]    | Higher | Robust to imbalance; measures discrimination. | Harder to intuitively explain to non-tech audience. |
+
+#### For this project:
+- Use **MSE** for `pct_time_high` (regression).  
+- Use **ROC-AUC** for `max_risk` and `median_risk` (classification).  
+- Fall back to **accuracy** only when a fold has a single class (so ROC-AUC is undefined).  
+
+
+### What we did 
+`complete_train_lightgbm.py`
+ - sets up a loop for each target variable, selects the appropriate model type and metric, and prepares a list to store the results from cross-validation folds. It’s the first step in a modular, reusable training pipeline.
+
+
+
+confused about this:
+No – each saved LightGBM model file doesn’t store the X and y data. It only stores the trained model itself:
+	•	The model contains all the information LightGBM learned from training on the X and y for that fold (splits, leaf values, weights, etc.).
+	•	When you load the model later, you can use it to make predictions on new X data.
+
+So the actual X_train and y_train aren’t stored in the file – only the learned parameters.
+
+Workflow recap for clarity:
+	1.	For fold 1 of max_risk:
+	•	Train model on X_train_fold1 and y_train_fold1.
+	•	Save model → saved_models/max_risk_fold1.txt.
+	2.	Repeat for folds 2–5 and other targets.
+
+Later, when predicting:
+	•	Load each model.
+	•	Pass in new X data (e.g., the corresponding test fold or external data).
+	•	Get predictions.
+
+This is why the saved files are small – they don’t contain the raw data, only the trained LightGBM model parameters.
+
+
+1️⃣ train_idx / test_idx
+	•	These are arrays of row numbers (integers) that tell Python which rows to select from your DataFrame.
+train_index = [0,1,2,4,5,6,...,99]   # 80 integers
+test_index  = [3,10,15,21,...,95]   # 20 integers
+They map to positions in the DataFrame, not the actual content.
+
+⸻
+2️⃣ X_train / X_test after .iloc
+X_train = X.iloc[train_idx]
+X_test  = X.iloc[test_idx]
+	•	.iloc takes the row numbers from train_index / test_index and extracts the corresponding rows.
+	•	The resulting X_train and X_test retain the original row indices internally (you can see them in X_test.index) but most operations ignore them unless you explicitly print .index.
+
+  	•	The term “index” refers to row positions in the original DataFrame, not a separate object in X_test or y_test.
+	•	You only need to know the indices if you want to trace which exact patients are in which fold.
+
+
+Feed to Model
+  	•	X_train / y_train → model learns patterns
+	•	X_test / y_test → model monitors performance for early stopping
+	•	Each fold repeats with a different 20-patient test set and 80-patient training set.
+
+   Repeat for All Folds
+   	•	Every patient eventually appears in the test fold exactly once.
+	•	This ensures full coverage for reliable performance estimation.
+
+key points
+  	1.	train_index / test_index → integers mapping rows in original dataset.
+	2.	.iloc → extracts actual feature/label rows based on these indices.
+	3.	X_train / y_train → used to train the model
+	4.	X_test / y_test → used to evaluate/monitor the model per fold
+	5.	Indices are preserved internally, but mostly ignored during training.
+
+
+✅ Summary:
+	•	Training → X_train, y_train (model knows these patients)
+	•	Evaluation → X_test, y_test (model must generalise, doesn’t know these)
+	•	Cross-validation ensures each patient is used for both training (4 times) and testing (once), without overlap within a fold.
+
+  	•	X_train = the questions (heart rate, SpO₂, etc.)
+	•	y_train = the answers (risk level)
+
+During training, LightGBM guesses the answers → compares with y_train → updates itself to do better.
+If you didn’t give it y_train, it would have nothing to compare against and wouldn’t learn anything.
+
+
+Does the model reset between folds?
+✅ Yes, the model resets at the start of every fold.
+	•	Each fold trains a fresh LightGBM model (new instance of LGBMClassifier or LGBMRegressor).
+	•	It is only trained on that fold’s X_train/y_train.
+	•	Once trained and evaluated, it’s saved (or discarded), and the next fold starts from scratch.
+
+So there isn’t one “master model” gradually seeing all 100 patients — it’s actually 5 separate models (one per fold).
+
+Why reset?
+
+If you didn’t reset:
+	•	By the time you get to Fold 5, the model would have already seen all 100 patients in previous folds.
+	•	That would defeat the purpose of having a “test set” → the model would indirectly know the answers.
+	•	Evaluation would be optimistically biased and untrustworthy.
+
+Resetting ensures:
+	•	In each fold, the test patients are truly unseen.
+	•	The performance metric reflects generalisation, not memory.
+
+What you end up with
+	•	5 trained models (e.g. max_risk_fold1.pkl, max_risk_fold2.pkl, …).
+	•	5 scores (one per fold).
+	•	A final average score across folds → this is the unbiased estimate of performance.
+
+Step 1: What happens in k-fold CV
+	•	For each outcome (max_risk, median_risk, pct_time_high), we train 5 models (one per fold).
+	•	That’s why you’ll see 15 saved models total (3 outcomes × 5 folds).
+
+So yes → at the end you’ve got 15 trained model files.
+
+⸻
+
+Step 2: Do we combine them into one model?
+
+🔑 No — the models are not combined into one.
+	•	The point of cross-validation is evaluation, not deployment.
+	•	The goal is to estimate how well the model type (e.g. LightGBM classifier) will generalise to unseen patients.
+	•	You average the 5 fold scores → that gives you a robust performance metric.
+
+⚡ In summary:
+	•	Cross-validation → gives you 15 models total.
+	•	They are not combined; their scores are averaged.
+	•	Afterwards, you usually train 1 final model per outcome on all the data.
+	•	So you’ll finish with evaluation results (from 15 models) and 3 final models for deployment.
