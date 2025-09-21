@@ -1106,10 +1106,9 @@ This makes LightGBM phase complete, credible, and deployment-worthy without unne
 #### 1. **Mean Squared Error (MSE)**
 - **Type:** Regression metric (continuous outcomes).
 - **Definition:**  
-  \[
-  \text{MSE} = \frac{1}{n} \sum_{i=1}^{n} (y_i - \hat{y}_i)^2
-  \]  
-  where \(y_i\) = true value, \(\hat{y}_i\) = predicted value.  
+```text
+MSE = (1/n) * Σ (y_i - ŷ_i)^2
+```
 - **What it measures:**  
   - The *average squared difference* between predictions and actuals.  
   - Penalises large errors much more heavily than small ones (because of the square).  
@@ -1123,9 +1122,9 @@ This makes LightGBM phase complete, credible, and deployment-worthy without unne
 #### 2. **Accuracy**
 - **Type:** Classification metric (discrete categories).  
 - **Definition:**  
-  \[
-  \text{Accuracy} = \frac{\text{# correct predictions}}{\text{total # predictions}}
-  \]  
+```text
+Accuracy = (# correct predictions) / (total # predictions)
+```
 - **What it measures:**  
   - The proportion of predictions that are exactly correct.  
 - **How it evaluates:**  
