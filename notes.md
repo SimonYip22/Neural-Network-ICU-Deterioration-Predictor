@@ -1049,7 +1049,21 @@ y_test  = labels   for patients in fold 5
 
 ---
 
-## Day 10 Notes 
+## Day 10 Notes - LightGBM Training + Validation (Steps 3–7)
+
+### Goals
+- **Complete the baseline LightGBM pipeline**: initialise, train, validate, and save models.
+- Produce reproducible patient-level ML outputs for all three outcomes (max_risk, median_risk, pct_time_high).
+- Debug pipeline issues, document failures, and reflect on dataset limitations.
+- Begin rethinking project framing if classification targets prove unstable.
+
+### Purpose of Baseline Classical LightGBM ML Model
+1. Show I can prepare patient-level data for ML.
+2. Provides a baseline classical ML benchmark for patient deterioration prediction.
+3. Demonstrates an end-to-end ML workflow, and a credible, well-structured pipeline (data prep → CV → training → saving → validation → documentation → final deployment models).
+4. Ensures reproducibility and robustness with cross-validation, and deployment readiness (final models).
+5. Adds interpretability through feature importance, crucial in clinical healthcare settings.
+6. Establishes a strong baseline Performance benchmark for later comparison with Neural Networks, showing their added value.
 
 ### Phase 3: LightGBM Training + Validation (Steps 1–8) Finalised 
 **Goal: Train, validate, and document a LightGBM model on patient-level features, producing a polished, credible baseline.**
@@ -1094,13 +1108,31 @@ This makes LightGBM phase complete, credible, and deployment-worthy without unne
 - **Overfitting risk**: with 100 patients, “chasing” tiny gains just makes results unstable and less reproducible.
 - **Time sink**: delays me getting to Neural Nets (the unique, impressive part of your project).
 
-### Purpose of Baseline Classical LightGBM ML Model
-1. Show I can prepare patient-level data for ML.
-2. Provides a baseline classical ML benchmark for patient deterioration prediction.
-3. Demonstrates an end-to-end ML workflow, and a credible, well-structured pipeline (data prep → CV → training → saving → validation → documentation → final deployment models).
-4. Ensures reproducibility and robustness with cross-validation, and deployment readiness (final models).
-5. Adds interpretability through feature importance, crucial in clinical healthcare settings.
-6. Establishes a strong baseline Performance benchmark for later comparison with Neural Networks, showing their added value.
+### What We Did
+**Step 1: Phase 3 Steps 3-7 Completed**
+1. Model Training `complete_train_lightgbm.py`
+	- LGBMClassifier for classification targets (max_risk, median_risk).
+	-	LGBMRegressor for continuous regression target (pct_time_high).
+  - Sets up a loop for each target variable, selects the appropriate model type and metric, and prepares a list to store the results from cross-validation folds. 
+	-	Ran 5-fold cross-validation, early stopping enabled.
+2. Model Saving, Validation and Documentation Attempt
+	-	Tried to save 15 trained models (.pkl) to ensures reproducibility and ability to reload for later use.
+	- Tried to generate predictions on held-out folds, metrics logging (ROC-AUC, accuracy for classification; RMSE/MSE for regression).
+  - Attempted to captured metrics, feature importances, dataset shapes and training summary outputs.
+3. Debugging / Checks When Running Script
+	- Multiple crashes due to missing classes in folds (e.g., fold contained only one label).
+	- Verified splits, indices, and LightGBM behaviour.
+**Model Outputs `src/models-lightgbm/saved_models/`**
+1. 15 trained models (.pkl) → 5 folds × 3 targets → fold-wise trained models. Lets us reload and run predictions on unseen data later.
+2. 3 per-target CV result CSVs (*_cv_results.csv) → fold-wise scores per target. Enables calculation of mean/variance of performance → essential for robust evaluation.
+3. 15 feature importance CSVs (*_fold{fold_idx}_feature_importance.csv) → top features per fold per target. Supports interpretability and clinical storytelling.
+4. 1 training summary text file (training_summary.txt) → cumulative summary for all targets of the dataset shape, mean CV score, top features per target. High-level snapshot of performance and reproducibility.
+**Today’s notes stop at the belief that the dataset was fundamentally flawed.** 
+- Tomorrow’s entry will capture the turning point when manual inspection revealed the data wasn’t as bad as feared.
+- **Why we thought dataset was unusable**:
+	- **Extreme class imbalance**: With 5-fold CV, many folds end up with zero examples of the minority class. ROC-AUC or any meaningful classification metric cannot be computed if a fold has only one class.
+	- **Data sparsity**: The model cannot learn patterns from a single positive example. Even if you reduce folds to 2–3, the minority class is still too rare for reliable training.
+  - **Metrics are meaningless**: Fold scores like 0.5 are just random guessing, not informative. Any feature importance will also be unstable and unreliable.
 
 ### Evaluation Metrics: MSE vs ROC-AUC vs Accuracy  
 #### 1. **Mean Squared Error (MSE)**
@@ -1168,270 +1200,193 @@ Accuracy = (# correct predictions) / (total # predictions)
 - Use **ROC-AUC** for `max_risk` and `median_risk` (classification).  
 - Fall back to **accuracy** only when a fold has a single class (so ROC-AUC is undefined).  
 
+### Reflection
+#### Challenges
+- **Debugging Challenges**: 
+  - Initial confusion about what was actually stored in the saved LightGBM model files.  
+  - It wasn’t clear whether the `.pkl` files contained the raw training/validation data (`X`, `y`) or just the learned parameters.  
+  - Misunderstanding how indices (`train_index`, `test_index`) worked during cross-validation created uncertainty about which patients were included in each fold.   
+- **Pipeline breakdowns**: Training repeatedly failed, with models crashing mid-run despite fixing code errors.
+- **Misdiagnosing issues**: Initially believed the problems were bugs in the training pipeline itself rather than fundamental dataset limitations.
+- **Dataset shock**: Discovered that risk variables (max_risk, median_risk, pct_time_high) were highly imbalanced and potentially unusable for ML. This made the entire project feel at risk.
+- **Time sink**: Large portions of the day were spent patching, rerunning, and rechecking, only to end up back at the same roadblock.
 
+#### Solutions
+- Clarified that **saved models do not contain raw data**:  
+  - Each `.pkl` file only stores the learned parameters (tree splits, leaf weights, feature usage).  
+  - This is why saved files are small, and why new input data is always required for predictions.  
+- Confirmed how data splits are generated and used:  
+  - `train_index` and `test_index` are row numbers pointing back to the original dataframe.  
+  - `.iloc` then retrieves the actual patient rows for each split.  
+- Understood the k-fold cross-validation cycle:  
+  - Every patient appears in training 4 times and testing once across 5 folds.  
+  - Each fold trains a **fresh LightGBM model** (fully reset), preventing data leakage and ensuring unbiased evaluation.  
+- **Investigated why folds failed for classification**:  
+  - Realised **KFold does not guarantee class balance** → some folds excluded minority classes completely.  
+  - Learned that **StratifiedKFold preserves class proportions** across folds, which avoids crashes in most scenarios.  
+  - Still, with very rare classes, even StratifiedKFold can fail unless LightGBM is told explicitly which labels exist (`classes=[…]`). 
+- **Brainstormed a complete redesign of the pipeline**:
+	- Dropping max_risk and median_risk entirely.
+	- Redefining new patient-level and timestamp-level variables.
+	-	Rewriting make_patient_features.py and make_timestamp_features.py to generate new CSVs.
+	-	Pivoting from “ICU deterioration prediction” to a looser framing (general NEWS2 trend insights).
+- **Began drafting how this pivot could be explained in the final report and portfolio**: as a realistic example of dynamic ML research where goals adapt to messy data.
 
-### What we did 
-**Model Training `complete_train_lightgbm.py`**
- - sets up a loop for each target variable, selects the appropriate model type and metric, and prepares a list to store the results from cross-validation folds. It’s the first step in a modular, reusable training pipeline.
-**Model Saving**
-**Model Validation**
-**Documentation**
-**Model Outputs `src/models-lightgbm/saved_models/`**
-1. 15 trained models (.pkl) → 5 folds × 3 targets
-2. 3 per-target CV result CSVs (*_cv_results.csv) → one per target
-3. 15 feature importance CSVs (*_fold{fold_idx}_feature_importance.csv) → one per fold per target
-4. 1 training summary text file (training_summary.txt) → cumulative summary for all targets
-completed the full baseline LightGBM training and evaluation pipeline. Step 8 will be more interpretation and polish, rather than writing new code.
+#### Learnings
+- **Models ≠ data**: A LightGBM model file is a set of learned rules, not a copy of the dataset.  
+- **Cross-validation mechanics**: Fold indices are just pointers; `.iloc` turns them into actual data subsets for training/testing.  
+- **Coverage guarantee**: CV ensures all patients contribute to both training and testing, giving a robust estimate of model performance.  
+- **Resetting per fold**: Essential so the model cannot “remember” test data from earlier folds.  
+- **Stratified vs regular KFold**:  
+  - Regular KFold risks missing labels in small/imbalanced datasets.  
+  - StratifiedKFold reduces this risk by preserving proportions, but still requires caution when classes are extremely rare.  
+- **Evaluation vs deployment**: Cross-validation produces multiple models for scoring; deployment requires retraining once on the full dataset.  
+- **Debugging isn’t always coding**: Sometimes errors trace back to the dataset, not the script.
+- **Rare events cripple models**: Small clinical datasets often lack enough high-risk outcomes to train or validate classifiers.
+- **Metrics and pipelines don’t reveal it until runtime**
+	-	Accuracy or ROC-AUC will fail only when a fold is completely missing a class, which is exactly what happened.
+	-	Static checks (like looking at column summaries) cannot guarantee every fold has sufficient data, this only manifests during CV.
+- **Adaptability matters**: The ability to rethink targets and framing under pressure is as important as technical implementation.
+- **Documentation is critical**: Capturing this struggle makes the project more authentic and reflective of real-world ML practice.
 
-can you explain why each output is necessary and what it shows 
-- Saved fold-wise trained models
-- Fold-wise scores per target
-- Top features per fold per target
-- Overall summary of dataset shape, mean CV score, top features per target
+### How I Could Have Prevented Todays Issues
+1. **Inspect dataset first**
+  - Check class distributions (df['max_risk'].value_counts() etc.) before choosing targets.
+  - If the minority class is tiny (1–2 samples), CV will fail.
+  - Always check the class balance for classification tasks before deciding on CV splits.
+2. **Select better targets**
+  - For classification, choose variables with enough samples in each class (at least 5–10 per class for a small dataset).
+  -	Rare binary/ordinal targets may require deciding not to train that target at all.
+  - Or use regression targets where sample size is adequate.
+3. **Document reasoning**
+  - Even if you pick a poor target, explain why it fails and why you skipped it. This demonstrates critical thinking and understanding of ML limitations.
+  - In portfolio or reproducible pipelines, it’s perfectly acceptable to document why some targets are unusable.
 
-### How Gradient Boosted Decision Tree Model Works
+### Overall Reflection 
+- **Emotionally difficult day**: felt like project collapse due to dataset sparsity.
+- **Felt like starting over:** at one point it seemed we would need to rebuild the pipeline from scratch with new variables and rewritten feature engineering scripts.
+- **Learned critical ML lesson**: sometimes data, not code, is the bottleneck.
+- **The Positives**: Built a fully reproducible LightGBM pipeline. Implemented CV, early stopping, feature importance logging. Learned about why small/imbalanced datasets break classification, which is valuable knowledge for any real-world ML project.
+- Documented approach shifts and backup plans.
+- Need to adjust the targets we report on. Many published ML projects run into exactly this issue, small or imbalanced datasets are extremely common in healthcare.
+- Prepared to reframe project as risk trend prediction rather than rare-event deterioration.
+
+### Extras / Insights 
+#### How Gradient Boosted Decision Tree Model Works
 -	Trees split on feature thresholds.
 -	Each split improves the model’s predictions.
+- Build trees sequentially, each correcting previous errors.
 -	Feature importance = how often (or how much) the model used each feature to reduce errors.
+#### Portfolio Framing
+- This day highlights resilience and scientific reasoning, not everything in ML runs smoothly, and documenting the “bad days” strengthens credibility.
+- Rare-event prediction wasn’t possible; instead, the model learns risk patterns and trends from NEWS2 data.
+- Clinically meaningful to frame this as “predicting risk trajectories and physiological trends,” not “predicting rare ICU collapses.”
+- Still valid to call it a deterioration predictor, just not for extreme events.
+- Shows adaptability, strong methodology, and awareness of real-world clinical ML challenges.
+- **Key message for CV/portfolio:**
+“Originally, max_risk and median_risk were considered for classification, but due to extreme class imbalance these targets were unreliable. The project pivoted to focus on pct_time_high regression, demonstrating robust ML methodology, interpretable feature importance, and the ability to adapt pipelines to messy real-world healthcare data. The model predicts trends in patient risk (NEWS2) over ICU stay, identifying factors contributing to changes in physiological state. The clinical signal however is still weak due to data sparsity.”
+
+### Project Credibility Even With These Issues
+- **Technical skills**:
+  - Data cleaning and preprocessing of high-dimensional clinical time series.
+  - Rolling windows, staleness flags, LOCF, missingness handling.
+  - Multi-target ML pipelines (LightGBM patient-level regression, TCN timestamp-level).
+- **Uniqueness / clinical insight**:
+  - Demonstrates how to handle real-world messy clinical data.
+  - Shows understanding of risk trajectories, time-series aggregation, and how to extract meaningful features.
+- **Metrics / numbers**:
+  - Regression outputs (RMSE, R², predicted vs actual plots) are still quantitative.
+  - **Comparison with NEWS2 baseline remains valid**: you can compute “how much the ML model reduces error vs raw NEWS2 predictions” or correlation improvement.
+  - It’s less about rare-event prediction and more about predicting general risk patterns / trends in patient physiology, which is a legitimate clinical ML task.
+- **Recruiter impression**:
+  - Shows maturity and practical problem-solving, which is impressive to recruiters and interviewers.
+	- They don’t care that rare high-risk classes were absent. They care that you:
+    1. Detected the data problem.
+    2. Adapted pipeline intelligently.
+    3. Produced measurable, interpretable results.
+
+---
+
+Day 11 - 
+
+### Checking Patient-Level Data 
+
+**Distribution Results**
+**Max Risk Distribution (100 patients total):**
+Score 0: 8 patients (8.0%)
+Score 1: 0 patients (0.0%)
+Score 2: 18 patients (18.0%)
+Score 3: 74 patients (74.0%)
+**Median Risk Distribution (100 patients total):**
+Score 0: 84 patients (84.0%)
+Score 1: 0 patients (0.0%)
+Score 2: 16 patients (16.0%)
+Score 3: 0 patients (0.0%). 
+**Percentage Time High Distribution (100 patients total)**
+Basic Statistics:
+  Range: 0.0000 to 0.4407 (0% to 44.1% time in high-risk state)
+  Mean: 0.1114 (11.1%)
+  Standard deviation: 0.1040
+  Median: 0.0802 (8.0%)
+Critical Distribution Issues:
+  High Zero Inflation: 27% of patients have exactly 0% time in high-risk state
+  Right-Skewed Distribution: Skewness = 1.24 (moderate positive skew)
+  High Variability: Coefficient of variation = 0.93
+Regression Suitability: **MODERATE**
+Potential Issues Identified:
+  Moderately skewed distribution (could affect MSE optimization)
+  High proportion of zeros may create prediction challenges
+  Non-normal distribution may impact residual patterns. 
+
+**Results with Combined Scoring (0+1 → 1)**
+**Max Risk Distribution (Combined):**
+Score 1: 8 patients (8.0%) - [was 8 patients with score 0 + 0 patients with score 1]
+Score 2: 18 patients (18.0%) - [unchanged]
+Score 3: 74 patients (74.0%) - [unchanged]
+**Median Risk Distribution (Combined):**
+Score 1: 84 patients (84.0%) - [was 84 patients with score 0 + 0 patients with score 1]
+Score 2: 16 patients (16.0%) - [unchanged]
+Score 3: 0 patients (0.0%) - [unchanged]	
 
 
+### Conclusions On Patient-Level Data
+**Max Risk**
+- Data decently well distributed
+- If we do a 5-fold CV, some folds may end up with no class 1 examples (because there are only 8 total). But this is not catastrophic. It just means performance on class 1 will be unstable.
+- For more stable per-class results, reduce to 3 folds. 
+**Median Risk**
+- It makes clinical sense that nobody’s median is high-risk, most patients don’t sit at high risk their whole stay. That’s clinically plausible.
+- But from a modeling perspective it’s still heavily imbalanced (84 vs 16), model may literally fail to see class 2 in certain folds → unstable results.
+- Median risk never reached 3 in this dataset, so we must restrict the class set to [1,2].
+- Frame it as a proof-of-concept, not a strong predictor.
+**Percentage Time High**
+- pct_time_high is continuous and has a good spread across patients.
+- No need to transform pct_time_high for current tree-based model pipeline.
+- Skew and zero inflation are not a major problem in this context.
+- Doing extra preprocessing would add work but minimal benefit.
+**Overall Conclusions**
+- Data distribution is realistic. With 0+1 combined, normal K-Fold 3-fold CV is perfectly fine. pct_time_high is continuous and well-distributed, so orginal 5 folds is perfectly fine, no need for special handling as regression will be stable.
+- Imbalance reflects real clinical distributions, we can still use all three variables, but document this insight into the clinical dataset limitations.
+- The model can learn patterns from this dataset effectively.
+- No longer need to code for new variables and replan outcomes for LightGBM and Neural Network models as we previously thought.
+- Overall we keep all three targets, have both classification and regression tasks, can explain different fold choices per target as a **thoughtful design decision based on data distribution.**
 
-### Reflection
-confused about this:
-No – each saved LightGBM model file doesn’t store the X and y data. It only stores the trained model itself:
-	•	The model contains all the information LightGBM learned from training on the X and y for that fold (splits, leaf values, weights, etc.).
-	•	When you load the model later, you can use it to make predictions on new X data.
-
-So the actual X_train and y_train aren’t stored in the file – only the learned parameters.
-
-Workflow recap for clarity:
-	1.	For fold 1 of max_risk:
-	•	Train model on X_train_fold1 and y_train_fold1.
-	•	Save model → saved_models/max_risk_fold1.txt.
-	2.	Repeat for folds 2–5 and other targets.
-
-Later, when predicting:
-	•	Load each model.
-	•	Pass in new X data (e.g., the corresponding test fold or external data).
-	•	Get predictions.
-
-This is why the saved files are small – they don’t contain the raw data, only the trained LightGBM model parameters.
-
-
-1️⃣ train_idx / test_idx
-	•	These are arrays of row numbers (integers) that tell Python which rows to select from your DataFrame.
-train_index = [0,1,2,4,5,6,...,99]   # 80 integers
-test_index  = [3,10,15,21,...,95]   # 20 integers
-They map to positions in the DataFrame, not the actual content.
-
-⸻
-2️⃣ X_train / X_test after .iloc
-X_train = X.iloc[train_idx]
-X_test  = X.iloc[test_idx]
-	•	.iloc takes the row numbers from train_index / test_index and extracts the corresponding rows.
-	•	The resulting X_train and X_test retain the original row indices internally (you can see them in X_test.index) but most operations ignore them unless you explicitly print .index.
-
-  	•	The term “index” refers to row positions in the original DataFrame, not a separate object in X_test or y_test.
-	•	You only need to know the indices if you want to trace which exact patients are in which fold.
-
-
-Feed to Model
-  	•	X_train / y_train → model learns patterns
-	•	X_test / y_test → model monitors performance for early stopping
-	•	Each fold repeats with a different 20-patient test set and 80-patient training set.
-
-   Repeat for All Folds
-   	•	Every patient eventually appears in the test fold exactly once.
-	•	This ensures full coverage for reliable performance estimation.
-
-key points
-  	1.	train_index / test_index → integers mapping rows in original dataset.
-	2.	.iloc → extracts actual feature/label rows based on these indices.
-	3.	X_train / y_train → used to train the model
-	4.	X_test / y_test → used to evaluate/monitor the model per fold
-	5.	Indices are preserved internally, but mostly ignored during training.
-
-
-✅ Summary:
-	•	Training → X_train, y_train (model knows these patients)
-	•	Evaluation → X_test, y_test (model must generalise, doesn’t know these)
-	•	Cross-validation ensures each patient is used for both training (4 times) and testing (once), without overlap within a fold.
-
-  	•	X_train = the questions (heart rate, SpO₂, etc.)
-	•	y_train = the answers (risk level)
-
-During training, LightGBM guesses the answers → compares with y_train → updates itself to do better.
-If you didn’t give it y_train, it would have nothing to compare against and wouldn’t learn anything.
-
-
-Does the model reset between folds?
-✅ Yes, the model resets at the start of every fold.
-	•	Each fold trains a fresh LightGBM model (new instance of LGBMClassifier or LGBMRegressor).
-	•	It is only trained on that fold’s X_train/y_train.
-	•	Once trained and evaluated, it’s saved (or discarded), and the next fold starts from scratch.
-
-So there isn’t one “master model” gradually seeing all 100 patients — it’s actually 5 separate models (one per fold).
-
-Why reset?
-
-If you didn’t reset:
-	•	By the time you get to Fold 5, the model would have already seen all 100 patients in previous folds.
-	•	That would defeat the purpose of having a “test set” → the model would indirectly know the answers.
-	•	Evaluation would be optimistically biased and untrustworthy.
-
-Resetting ensures:
-	•	In each fold, the test patients are truly unseen.
-	•	The performance metric reflects generalisation, not memory.
-
-What you end up with
-	•	5 trained models (e.g. max_risk_fold1.pkl, max_risk_fold2.pkl, …).
-	•	5 scores (one per fold).
-	•	A final average score across folds → this is the unbiased estimate of performance.
-
-Step 1: What happens in k-fold CV
-	•	For each outcome (max_risk, median_risk, pct_time_high), we train 5 models (one per fold).
-	•	That’s why you’ll see 15 saved models total (3 outcomes × 5 folds).
-
-So yes → at the end you’ve got 15 trained model files.
-
-⸻
-
-Step 2: Do we combine them into one model?
-
-🔑 No — the models are not combined into one.
-	•	The point of cross-validation is evaluation, not deployment.
-	•	The goal is to estimate how well the model type (e.g. LightGBM classifier) will generalise to unseen patients.
-	•	You average the 5 fold scores → that gives you a robust performance metric.
-
-⚡ In summary:
-	•	Cross-validation → gives you 15 models total.
-	•	They are not combined; their scores are averaged.
-	•	Afterwards, you usually train 1 final model per outcome on all the data.
-	•	So you’ll finish with evaluation results (from 15 models) and 3 final models for deployment.
-
-This happened during running teh script
-You are doing 5-fold CV.
-	•	In one training fold, maybe all patients had class 1 (so the model only knows about label 1).
-	•	But in the validation fold, a patient had label 0.
-	•	When LightGBM tried to evaluate, it crashed: “I never saw label 0 before”.
-
-👉 The core problem is some folds don’t include all classes (0 and 1).
-
-2️⃣ Why StratifiedKFold fixes this
-
-StratifiedKFold is like KFold, but it preserves the proportion of each class in every split.
-	•	Example: if your dataset has 60% class 0 and 40% class 1,
-	•	KFold might randomly put all 0s in training and all 1s in validation (bad).
-	•	StratifiedKFold guarantees each fold will have ~60% 0 and ~40% 1 (good).
-
-This way, every train and validation split has both labels, and LightGBM won’t crash.
-
-For pct_time_high, it’s not labels at all — it’s continuous numbers (percentages).
-So here, we don’t worry about label 0/1. That’s why we keep normal KFold.
-
-1. The StratifiedKFold error
-TypeError: StratifiedKFold.split() missing 1 required positional argument: 'y'
-Why?
-	•	KFold.split() → only needs X.
-	•	StratifiedKFold.split() → requires both X and y (because it must check the class distribution).
-
-ValueError: y contains previously unseen labels: [np.int64(0)]
-	•	StratifiedKFold ≠ guaranteed both labels in every training fold.
-	•	It just balances proportions as much as possible.
-	•	Small / imbalanced dataset = folds without both classes.
-That’s why we need to force LightGBM to know both labels ([0,1]) up front, even if one is absent in the current fold.
-
-What this tells us about the dataset
-	•	It’s small and likely imbalanced.
-	•	For some classification tasks, there might be too few patients in one category.
-	•	This makes cross-validation more fragile → you get folds where one class vanishes.
-
-This doesn’t mean the dataset is “bad”, but it does mean:
-	1.	The classification problems (max_risk, median_risk) may not be very strong candidates unless you handle imbalance carefully.
-	2.	Metrics like ROC-AUC will be noisy / unstable with such small test folds.
-	3.	We’ll need to explicitly help LightGBM understand both classes exist (with classes=[0,1]) and maybe consider different CV strategies (like fewer folds or stratify with caution).
-
-In scikit-learn models you can pass class_weight="balanced" to fit().
-in LightGBM’s sklearn API, class_weight is a parameter of the constructor, not the .fit() method.
-Move class_weight="balanced" into the model constructor.
-
-UserWarning: The least populated class in y has only 1 members, which is less than n_splits=5.
-tells us that in your dataset:
-	•	For max_risk, one of the labels (0 or 1) appears only once across all 100 patients.
-	•	For median_risk, distribution might also be very imbalanced (e.g., 95 patients in class 0, 5 patients in class 1).
-
-So when StratifiedKFold tries to split into 5 folds, it cannot distribute that single positive case evenly → some folds have none.
-
-4. What this means for your targets
-	•	max_risk: basically broken. If only 1 patient is “at max risk”, the model cannot learn anything useful (it just predicts 0 all the time).
-	•	median_risk: maybe slightly better (a handful of positives), but still very skewed.
-
-So in effect, both targets are almost all class 0 → models will be very biased and unstable.
-
-Why it’s unusable
-	1.	Extreme class imbalance
-	•	You mentioned one class may have only 1 patient.
-	•	With 5-fold CV, many folds end up with zero examples of the minority class.
-	•	ROC-AUC or any meaningful classification metric cannot be computed if a fold has only one class.
-	2.	Data sparsity
-	•	The model cannot learn patterns from a single positive example.
-	•	Even if you reduce folds to 2–3, the minority class is still too rare for reliable training.
-	3.	Metrics are meaningless
-	•	Fold scores like 0.5 are just random guessing, not informative.
-	•	Any feature importance will also be unstable and unreliable.
-
-The code is fine, the problem is data sparsity. No LightGBM argument will fix it. You either have to reduce folds, oversample, or accept that classification for these targets isn’t feasible with your dataset.
-
-
-	1.	Skip classification for max_risk and median_risk
-	•	Focus on pct_time_high regression, which works fine.
-	•	You can still demonstrate your LightGBM pipeline and CV procedure.
-
-
-### Choice of targets
-max_risk and median_risk were problematic because:
-	•	They are binary/ordinal variables with extremely few positive cases.
-	•	LightGBM (and any CV method) requires a minimum number of samples per class to meaningfully train and evaluate.
-What you could have done:
-	1.	Inspect dataset first
-	•	Check class distributions (df['max_risk'].value_counts() etc.) before choosing targets.
-	•	If the minority class is tiny (1–2 samples), CV will fail.
-	2.	Select better targets
-	•	For classification, choose variables with enough samples in each class (at least 5–10 per class for a small dataset).
-	•	Or use regression targets where sample size is adequate.
-	3.	Document your reasoning
-	•	Even if you pick a poor target, explain why it fails and why you skipped it. This demonstrates critical thinking and understanding of ML limitations.
-
-### Overall 
-	•	Built a fully reproducible LightGBM pipeline.
-	•	Implemented CV, early stopping, feature importance logging.
-	•	Learned about why small/imbalanced datasets break classification, which is valuable knowledge for any real-world ML project.
-  - need to adjust the targets you report on. Many published ML projects run into exactly this issue — small or imbalanced datasets are extremely common in healthcare.
-
-Add a note in your documentation explaining why max_risk and median_risk could not be used — this actually shows good scientific reasoning.
-	•	In your report or documentation:
-	•	Explain the dataset limitation (rare positive examples).
-	•	Show that your pipeline is robust for the regression target.
-	•	Optionally, describe how classification would work if data were sufficient (the methodology).
-
-“Originally, max_risk and median_risk were considered for classification. These targets had too few positive cases, so CV and training were unreliable. Therefore, only pct_time_high regression was used.”
-
-4. Metrics and pipelines don’t reveal it until runtime
-	•	Accuracy or ROC-AUC will fail only when a fold is completely missing a class, which is exactly what happened.
-	•	Static checks (like looking at column summaries) cannot guarantee every fold has sufficient data — this only manifests during CV.
-
-Lessons learned
-	•	Always check the class balance for classification tasks before deciding on CV splits.
-	•	Rare binary/ordinal targets may require:
-	•	Reducing n_splits (so each fold has at least one positive case).
-	•	Oversampling / SMOTE for rare classes.
-	•	Or deciding not to train that target at all (as in your case).
-	•	In portfolio or reproducible pipelines, it’s perfectly acceptable to document why some targets are unusable.
-
-
-
-### Plan for Tomorrow (Day 11)
-**Step 8**:
-- **Hyperparameter tuning**: adjust learning rate, tree depth, and number of trees.
-- **Feature importance interpretation**: explain clinically relevant drivers.
-- Notes will include how feature importance is calculated and how the model works conceptually (splits, boosting, gradient contribution).
+### Changes We Will Make To `complete_train_lightgbm.py`
+1. **Combining 0+1 into a single “low-risk” class:**
+  - Reasonable simplification for modeling, especially given how few patients originally had score 0-1.
+  - NEWS2 scoring has risk split into low-risk, medium-risk and high-risk, however there is an extra sub-risk within low. If the total NEWS2 score lies within the low-risk range, but any single vital scored a 3, then the risk would be low-medium.
+  - Therefore it would still be reasonable to now combine low-risk (0) and low-medium risk (1) into just low-risk (1), so that medium-risk (2), and high-risk (2) follow.
+2. **Startified K-Fold no longer needed, Regular K-Fold is fine for all datasets:**
+  - The model will still see examples of 1, 2, 3 in some folds and can learn their patterns.
+  - Some folds may not have a rare class (e.g., max risk 0/1), but since those classes are small, the impact on model training is minimal.
+3. **Change N-Fold Strategy**:
+- max_risk (1, 2, 3) → 3-fold CV (to give class 1 a chance to appear in folds).
+- median_risk (1, 2 only, 3 absent) → 3-fold CV (binary classification, minority class represented).
+- pct_time_high (continuous regression) → 5-fold CV (enough data, no class imbalance problem).
+4. **Explicitly encode that only the discrete values [1,2,3] exist:**
+  - The model will be aware all of these values exist even if they don't all appear in the training folds.
+  - The model doesn’t expect anything outside [1,2,3].
+  - Therefore one the model avaluates training data it will be aware of all possible values.
+**Overall issue:** 
+- Folds without rare classes won’t see examples of them, so predictions for those rare classes may be less accurate in that fold. 
+- But given the clinical reality, this is acceptable — it mirrors the rarity of true events.

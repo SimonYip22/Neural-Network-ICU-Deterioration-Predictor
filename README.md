@@ -120,3 +120,21 @@ LightGBM Model (v1)
 | **Weaknesses / Limitations** | - Ignores sequence and timing of events.<br>- May lose some granularity of patient trajectory.<br>- Cannot capture interactions over time. | - Requires more computation and tuning.<br>- Harder to interpret.<br>- Sensitive to missing data; requires careful imputation or masking. |
 | **Output** | Predictions per patient, feature importances, evaluation metrics (AUROC, PR-AUC, etc.) | Predictions per timestamp or per patient trajectory, evaluation metrics (AUROC, PR-AUC, potentially time-dependent metrics) |
 | **Use case / Deployment** | Baseline model; interpretable; fast deployment; can be used for early warning systems using summary features | Advanced model for final deployment or v2 experimentation; may be integrated in real-time monitoring dashboards for continuous deterioration prediction |
+
+
+Portfolio narrative framing (objective and honest)
+
+Here’s how you can present this:
+	1.	State the limitation upfront:
+	•	“Synthetic dataset contains very few high-risk events; patient-level deterioration classification targets were largely zero. Standard classification tasks were infeasible.”
+	2.	Pivot your narrative to learnable outcomes:
+	•	LightGBM: Predict patient-level NEWS2 / continuous risk burden, analyze feature importances to show clinical insights.
+	•	TCN: Predict timestamp-level NEWS2 trends to capture dynamic risk evolution.
+	3.	Metrics and comparison:
+	•	Report regression metrics (RMSE, R², MAE).
+	•	Compare to simple baselines (mean NEWS2, last observation carried forward) to show your model improves predictive performance.
+	•	Highlight trend detection and feature influence, which is a clinically relevant skill.
+	4.	Why this is still strong for a portfolio:
+	•	Demonstrates data wrangling, preprocessing, CV, feature engineering, ML pipeline, model selection, hyperparameter tuning, and neural networks.
+	•	Shows clinical insight (feature importance, temporal trends).
+	•	Recruiters and technical reviewers care about how you solved real-world limitations, not just “predicted rare events.”
