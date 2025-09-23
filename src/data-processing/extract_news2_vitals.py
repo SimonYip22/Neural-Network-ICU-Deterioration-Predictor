@@ -1,8 +1,14 @@
-# --------------------------------------------------------------------
-# Data Extraction Script
-# Extracting and formatting data from csv files to compute NEWS2 vitals and CO2 retainer flag
-# Creates two output CSVs: news2_with_co2.csv and co2_retainer_details.csv
-# --------------------------------------------------------------------
+"""
+extract_news2_vitals.py
+
+Title: Raw CSV Data Extraction Script To Compute NEWS2
+
+Summary:
+- Extracting and formatting data from csv files to compute NEWS2 vitals and CO2 retainer flag
+Outputs:
+- news2_with_co2.csv (NEWS2 scores along with CO2 retainer column)
+- co2_retainer_details.csv (details of all CO2 retainer patients seperated from NEWS2 scores)
+"""
 
 import pandas as pd
 

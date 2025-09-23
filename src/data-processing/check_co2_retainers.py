@@ -1,8 +1,13 @@
-# --------------------------------------------------------------------
-# Helper/inspection script
-# Check for CO2 retainers in chartevents.csv
-# extract_news2_vitals.py creates co2_retainer_details.csv, but this script independently verifies the logic and prints how many patients qualify
-# --------------------------------------------------------------------
+"""
+check_co2_retainers.py
+
+Title: Helper / Inspection Script To Verify CO2 Retainer Logic
+
+Summary:
+- Check for CO2 retainers in chartevents.csv and verify that there are none which is why co2_retainer_details.csv is empty
+- extract_news2_vitals.py creates co2_retainer_details.csv
+- This script independently verifies the logic from extract_news2_vitals.py and prints how many patients qualify
+"""
 
 import pandas as pd
 

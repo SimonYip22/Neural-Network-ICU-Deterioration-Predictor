@@ -1,14 +1,17 @@
 """
 make_timestamp_features.py
 
-Generates timestamp-level ML features from news2_scores.csv:
+Title: Generate Timestamp-Level ML Features From news2_scores.csv
+
+Summary:
 - Handles missing values (LOCF + missingness flags)
 - Create carried-forward flags
 - Computes rolling windows (1h, 4h, 24h)
 - Computes time since last observation per vital
 - Encodes escalation/risk labels into numeric format
 
-Output: news2_features_timestamp.csv (ML-ready)
+Output:
+- news2_features_timestamp.csv (ML-ready)
 """
 
 # ------------------------------

@@ -1595,7 +1595,7 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 
 ---
 
-## Day 12 - Complete Phase 3: Hyperparameter Tuning, Feature Importance, and Final Models
+## Day 12 - Complete Phase 3: Hyperparameter Tuning, Feature Importance, and Deployment-Ready Models
 
 ### Goals
 - **Complete all of Phase 3 (steps 8-9)**:
@@ -1604,7 +1604,7 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 - Produce a polished, interpretable, portfolio-ready LightGBM baseline and deployment-style models for all three targets.
 
 ### What We Did 
-**Step 1: Hyperparameter Tuning for Classification and Regression Models**
+**Step 1: Hyperparameter Tuning for Classification and Regression Models `tune_models.py`**
 - **Select the key parameters to tune**:
 	- `learning_rate` → controls step size; balances speed vs overfitting.
 	- `max_depth` / `num_leaves` → limits tree complexity; prevents overfitting small dataset.
@@ -1614,26 +1614,33 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 -	**Evaluate performance using 5-fold cross-validation**:
 	-	AUROC / accuracy for max_risk and median_risk
 	-	RMSE for pct_time_high
+- **Output**: `best_params.json`
 - **Rationale**:
 	-	Optimises baseline performance without overfitting, especially critical with only 100 patients.
 	-	Ensures that the model is robust, reproducible, and interpretable.
 	-	Gives credibility for portfolio presentation, showing thoughtful model design, not just default parameters.
-**Step 2: Feature Importance Analysis**
+
+**Step 2: Feature Importance Analysis `feature_importance.py`**
 -	Extracted feature importance from LightGBM for each fold and aggregate across folds.
--	Identified the top 10–15 features per target.
+-	Identified the top 10 features per target.
 -	Visualised as bar plots for feature importance, aggregated across folds.
+- Script reuses the original "feature importance export" code from `complete_train_lightgbm.py` but instead of per-fold CSVs (15 files), it averages across folds and produces one clean CSV + one plot per target.
+- **Outputs**: 	`*_feature_importance.csv` (averaged across folds, one per target), `*_feature_importance.png` (plots)
 - **Rationale**:
 	-	Highlights which clinical features are driving predictions.
   - Visual outputs make the model interpretable and credible, demonstrates understanding of data, not just coding.
 	-	Aggregating across folds (computing average of feature importance from all 5 folds) reduces noise and prevents overemphasising spurious features potentially present in individual folds.
 	-	**Results are portfolio-ready**: visualisation clearly communicates results to reviewers.
-**Step 3: Trained Final Deployment-Style Models**
+
+**Step 3: Trained Final Deployment-Style Models `train_final_models.py`**
 -	Trained one final model per target (3 total) on the entire 100-patient dataset.
 -	Saved each model (.pkl) for reproducibility and demonstration.
+- **Outputs**: `final_*.pkl` (deployment-ready models, one per target) 
 - **Rationale**:
 	-	Makes full use of all available data after validation, mimics real-world deployment practice.
 	-	**Produces demonstrable models**: classifier + regressor.
 	-	These models will be used in later stages (e.g., neural network experiments, portfolio demos) and are a polished “deliverable” output.
+
 **Step 4: Documented Everything**
 -	Recorded final hyperparameter choices, cross-validation scores, and feature importance.
 -	Summarised in training_summary.txt or a notebook for portfolio inclusion.
@@ -1661,3 +1668,94 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 4. `min_data_in_leaf`
 	-	Minimum samples (number of patients) required in a leaf node.
 	-	Stabilises predictions by preventing leaves with very few samples (avoiding noisy splits).
+
+
+### Pipeline For Day 12
+```text
+news2_features_patient.csv (raw patient-level features)
+         │
+         ▼
+Script 1: tune_models.py (performs hyperparameter tuning & cross-validation)
+         │
+         ├─► CV Results CSVs per target (hyperparameter_tuning_runs/ )
+         ├─► Best Hyperparameters JSON (hyperparameter_tuning_runs/ )
+         └─► Logs of each tuning run for debugging / record-keeping (hyperparameter_tuning_runs/tuning_logs/)
+         │
+         ▼
+Script 2: feature_importance.py
+ - Aggregates feature importance across folds
+ - Produces visualisations
+         │
+         ├─► Feature Importance CSVs per target (feature_importance_runs/)
+         └─► Bar plots of top features per target (feature_importance_runs/)
+         │
+         ▼
+Script 3: train_final_models.py (trains 1 final model per target using best hyperparameters)
+         │
+         ├─► 3 Deployment-Ready Models (.pkl) (deployment_models/)
+         └─► Optional training logs (deployment_models/)
+         │
+         ▼
+Script 4: summarise_results.py
+ - Compiles CV scores, best hyperparameters, top features
+ - Produces portfolio-ready summary
+         │
+         └─► training_summary.txt (deployment_models/)
+```
+### File layout 
+```text
+data/
+└── processed-data/
+    └── news2_features_patient.csv                        # Input features dataset (all scripts read from here)
+
+src/
+└── ml-models-lightgbm/
+    ├── baseline_models/                                  # Original 34 baseline CV script outputs (Day 11)
+    │   ├── max_risk_fold1.pkl
+    │   ├── ...
+    │   ├── pct_time_high_fold5_feature_importance.csv
+    │   └── training_summary.txt
+    │
+    ├── hyperparameter_tuning_runs/                       # New hyperparameter tuning outputs (Day 12)
+    │   ├── max_risk_cv_results.csv
+    │   ├── median_risk_cv_results.csv
+    │   ├── pct_time_high_cv_results.csv
+    │   ├── best_params.json
+    │   └── tuning_logs/
+    │
+    ├── feature_importance_runs/                          # New feature importance + visualisation outputs (Day 12)
+    │   ├── max_risk_feature_importance.csv
+    │   ├── median_risk_feature_importance.csv
+    │   ├── pct_time_high_feature_importance.csv
+    │   ├── max_risk_feature_importance.png
+    │   ├── median_risk_feature_importance.png
+    │   └── pct_time_high_feature_importance.png
+    │
+    ├── deployment_models/                                # Final deployment-ready models + summary (Day 12)
+    │   ├── max_risk_final_model.pkl
+    │   ├── median_risk_final_model.pkl
+    │   ├── pct_time_high_final_model.pkl
+    │   └── training_summary.txt                          # Portfolio-ready summary: CV scores, best params, top features
+    │
+    ├── tune_models.py                                    # Script 1: Hyperparameter tuning + CV
+    ├── feature_importance.py                             # Script 2: Aggregate feature importance + visualisation plots
+    ├── train_final_models.py                             # Script 3: Train final models on full dataset
+    ├── summarise_results.py                              # Script 4: Generate summary for portfolio
+    ├── initial_train_lightgbm.py                         # Original test run script 
+    └── complete_train_lightgbm.py                        # Original complete baseline CV script 
+```
+### File Outputs
+
+
+✅ Option 2: Split into 3 smaller scripts
+	1.	tune_models.py → runs GridSearch, saves best_params.json.
+	2.	feature_importance.py → loads best params, produces CSV + plots.
+	3.	train_final_models.py → loads best params, trains final models, saves .pkl.
+
+	•	Pros
+	•	Very clean separation: each script has a single responsibility.
+	•	Easier to re-run only what you need (e.g., just re-train final models without re-tuning).
+	•	Looks very professional (modular pipeline).
+	•	Cons
+	•	Slightly more effort to run and document.
+	•	You’ll need to make sure each script saves/loads from the right place (extra bookkeeping).

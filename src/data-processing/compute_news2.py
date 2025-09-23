@@ -1,8 +1,17 @@
-# --------------------------------------------------------------------
-# NEWS2 Scoring Script
-# Input: news2_vitals_with_co2.csv (long format)
-# Output: news2_scores.csv (wide format with NEWS2 scores), news2_patient_summary.csv (per-patient summary)
-# --------------------------------------------------------------------
+"""
+compute_news2.py
+
+Title: NEWS2 Scoring Script
+
+Summary:
+- Input: news2_vitals_with_co2.csv (long format)
+- Calculate NEWS2 scores for every patient and create:
+    - Vital values for every patient timestamp per stay
+    - Summary of vital averages per patient
+Outputs:
+- news2_scores.csv (wide format with NEWS2 scores)
+- news2_patient_summary.csv (per-patient summary)
+"""
 
 import pandas as pd
 

@@ -1,9 +1,13 @@
-# --------------------------------------------------------------------
-# LightGBM quick test run on patient-level dataset
-# - Model initialisation setup and create both classifier (max_risk, median_risk) and regressor (pct_time_high)
-# - Quick test run on a small subset of training data (10 patients)
-# - Verifys pipeline before coding full production run on full dataset next
-# --------------------------------------------------------------------
+"""
+initial_train_lightgbm.py
+
+Title: LightGBM Quick Test Run On Patient-Level Dataset
+
+Summary:
+- Model initialisation setup and create both classifier (max_risk, median_risk) and regressor (pct_time_high)
+- Quick test run on a small subset of training data (10 patients)
+- Verifys pipeline before coding full production run on full dataset next
+"""
 
 # -----------------------------
 # Imports

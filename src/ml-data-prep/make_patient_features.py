@@ -1,14 +1,16 @@
 '''
-
 make_patient_features.py
 
-Generates patient-level ML features from news2_scores.csv:
+Title: Generate Patient-Level ML Features From news2_scores.csv
+
+Summary:
 - Aggregate vitals per patient timeline (median, mean, min, max per vital).
 - Performs patient-specific median imputation.
 - Computes % missingness per vital.
 - Encodes escalation/risk labels into numeric summary stats.
 
-Output: news2_features_patient.csv (compact, one row per patient, ML-ready summary).
+Output:
+- news2_features_patient.csv (compact, one row per patient, ML-ready summary).
 '''
 # ------------------------------
 # Imports

@@ -1,11 +1,15 @@
-# --------------------------------------------------------------------
-# Validation Testing Script 
-# - Unit tests for NEWS2 scoring logic to ensure the compute_news2 pipeline correctly implements NHS NEWS2 rules.
-# - Validates edge cases (SpO2 with/without supplemental O2, GCS changes, RR extremes).
-# - Tests CO2 retainer logic on synthetic patient rows.
-# - Uses synthetic patient rows matching the preprocessed CSV (wide format)
-# - Provides confidence before generating ML features.
-# --------------------------------------------------------------------
+"""
+validate_news2_scoring.py
+
+Title: Validation Testing Script For compute_news2.py Logic
+
+Summary:
+- Unit tests for NEWS2 scoring logic to ensure the compute_news2 pipeline correctly implements NHS NEWS2 rules.
+- Validates edge cases (SpO2 with/without supplemental O2, GCS changes, RR extremes).
+- Tests CO2 retainer logic on synthetic patient rows.
+- Uses synthetic patient rows matching the preprocessed CSV (wide format)
+- Provides confidence before generating ML features.
+"""
 
 import pandas as pd
 

@@ -1,10 +1,14 @@
-# --------------------------------------------------------------------
-# Dataset Preparation for LightGBM
-# - Safety and sanity checks for news2_features_patient.csv
-# - Handles patient-level features and multiple target variables
-# - Ensures compatibility for LightGBM ML model
-# --------------------------------------------------------------------
+"""
+prepare_patient_dataset.py
 
+Title: Dataset Preparation for LightGBM
+
+Summary:
+- Safety and sanity checks for news2_features_patient.csv
+- Handles patient-level features and multiple target variables
+- Ensures compatibility for LightGBM ML model
+
+"""
 # -----------------------------
 # Imports
 # -----------------------------

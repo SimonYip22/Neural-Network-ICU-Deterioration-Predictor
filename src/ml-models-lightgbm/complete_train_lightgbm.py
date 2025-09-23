@@ -19,7 +19,7 @@ Outputs:
   2. 3 per-target CV result CSVs (*_cv_results.csv) → one per target
   3. 15 feature importance CSVs (*_fold{fold_idx}_feature_importance.csv) → one per fold per target
   4. 1 training summary text file (training_summary.txt) → cumulative summary for all targets
-  = 34 files in saved_models/
+  = 34 files in baseline_models/
 """
 
 # -----------------------------
@@ -42,7 +42,7 @@ import csv                                                                      
 # Paths
 SCRIPT_DIR = Path(__file__).resolve().parent
 CSV_PATH = SCRIPT_DIR.parent.parent / "data" / "processed-data" / "news2_features_patient.csv"
-MODEL_DIR = SCRIPT_DIR / "saved_models"                                                             # Define folder to save trained LightGBM models (3 targets × 5 folds = 15 files total)
+MODEL_DIR = SCRIPT_DIR / "baseline_models"                                                          # Define folder to save trained LightGBM models (3 targets × 5 folds = 15 files total)
 
 # Ensure output folder exists
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
