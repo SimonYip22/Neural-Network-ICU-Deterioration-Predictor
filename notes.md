@@ -1583,5 +1583,61 @@ else:
 -	Improved code robustness with flexible .fit() and predictions (y_test).
 -	Produced the first complete, stable run with clinically relevant framing.
 
+### Next Steps
+**Step 8: Hyperparameter Tuning + Feature Importance**
+-	Tune key parameters such as learning rate, tree depth, number of trees, and leaf size for balanced performance.
+-	Aggregate and analyse feature importance across folds to highlight clinical drivers and make results interpretable.
+**Step 9:	Final Model Training (Deployment-Style Models)**
+-	Train one final model per target (3 total) on the full 100-patient dataset.
+-	**Purpose**: maximise use of available data, produce deployment-ready models, and generate demonstrable outputs for portfolio or future work.
+**Outcome**: 
+By the end of Day 12, the LightGBM phase will be complete, validated, interpretable, and ready for demonstration without unnecessary overfitting or over-optimisation.
+
 ---
 
+Day 12 - Hyperparameter Tuning, Feature Importance, and Final Models
+
+### Goals
+- **Complete all of Phase 3 (steps 8-9)**:
+  - Hyperparameter Tuning + Feature Importance
+  - Final Model Training (Deployment-Style Models)
+- Produce a polished, interpretable, portfolio-ready LightGBM baseline and deployment-style models for all three targets.
+
+### What We Did 
+**Step 1: Hyperparameter Tuning for Classification and Regression Models**
+- **Select the key parameters to tune**:
+	- learning_rate → controls step size; balances speed vs overfitting.
+	- max_depth / num_leaves → limits tree complexity; prevents overfitting small dataset.
+	- n_estimators → total number of trees.
+	-	min_data_in_leaf → ensures each leaf has enough samples, stabilising predictions.
+-	Performed small manual sweeps or grid search over reasonable ranges.
+-	**Evaluate performance using 5-fold cross-validation**:
+	-	AUROC / accuracy for max_risk and median_risk
+	-	RMSE for pct_time_high
+- **Rationale**:
+	-	Optimises baseline performance without overfitting, especially critical with only 100 patients.
+	-	Ensures that the model is robust, reproducible, and interpretable.
+	-	Gives credibility for portfolio presentation, showing thoughtful model design, not just default parameters.
+**Step 2: Feature Importance Analysis**
+-	Extracted feature importance from LightGBM for each fold and aggregate across folds.
+-	Identified the top 10–15 features per target.
+-	Optionally visualised as bar plots for clarity.
+- **Rationale**:
+	-	Shows which clinical features drive predictions.
+	-	Makes results interpretable and portfolio-ready, demonstrates understanding of data, not just coding.
+	-	Aggregating across folds reduces noise and prevents overemphasising spurious features.
+**Step 3: Trained Final Deployment-Style Models**
+-	Trained one final model per target (3 total) on the entire 100-patient dataset.
+-	Saved each model (.pkl) for reproducibility and demonstration.
+- **Rationale**:
+	-	Makes full use of all available data after validation, mimics real-world deployment practice.
+	-	**Produces demonstrable models**: classifier + regressor.
+	-	These models will be used in later stages (e.g., neural network experiments, portfolio demos) and are a polished “deliverable” output.
+**Step 4: Documented Everything**
+-	Recorded final hyperparameter choices, cross-validation scores, and feature importance.
+-	Summarised in training_summary.txt or a notebook for portfolio inclusion.
+-	Saved visualisations (top features, performance metrics) for presentation.
+- **Rationale**:
+	-	Provides transparent, reproducible evidence of methodology.
+	-	Makes the project credible for reviewers, portfolio readers, or recruiters.
+	-	Serves as a baseline for future neural net models, anyone can see exactly how LightGBM performs before moving to more complex models.
