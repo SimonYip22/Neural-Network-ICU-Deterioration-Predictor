@@ -1595,7 +1595,7 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 
 ---
 
-Day 12 - Hyperparameter Tuning, Feature Importance, and Final Models
+## Day 12 - Complete Phase 3: Hyperparameter Tuning, Feature Importance, and Final Models
 
 ### Goals
 - **Complete all of Phase 3 (steps 8-9)**:
@@ -1606,10 +1606,10 @@ Day 12 - Hyperparameter Tuning, Feature Importance, and Final Models
 ### What We Did 
 **Step 1: Hyperparameter Tuning for Classification and Regression Models**
 - **Select the key parameters to tune**:
-	- learning_rate → controls step size; balances speed vs overfitting.
-	- max_depth / num_leaves → limits tree complexity; prevents overfitting small dataset.
-	- n_estimators → total number of trees.
-	-	min_data_in_leaf → ensures each leaf has enough samples, stabilising predictions.
+	- `learning_rate` → controls step size; balances speed vs overfitting.
+	- `max_depth` / `num_leaves` → limits tree complexity; prevents overfitting small dataset.
+	- `n_estimators` → total number of trees.
+	-	`min_data_in_leaf` → ensures each leaf has enough samples, stabilising predictions.
 -	Performed small manual sweeps or grid search over reasonable ranges.
 -	**Evaluate performance using 5-fold cross-validation**:
 	-	AUROC / accuracy for max_risk and median_risk
@@ -1621,11 +1621,12 @@ Day 12 - Hyperparameter Tuning, Feature Importance, and Final Models
 **Step 2: Feature Importance Analysis**
 -	Extracted feature importance from LightGBM for each fold and aggregate across folds.
 -	Identified the top 10–15 features per target.
--	Optionally visualised as bar plots for clarity.
+-	Visualised as bar plots for feature importance, aggregated across folds.
 - **Rationale**:
-	-	Shows which clinical features drive predictions.
-	-	Makes results interpretable and portfolio-ready, demonstrates understanding of data, not just coding.
-	-	Aggregating across folds reduces noise and prevents overemphasising spurious features.
+	-	Highlights which clinical features are driving predictions.
+  - Visual outputs make the model interpretable and credible, demonstrates understanding of data, not just coding.
+	-	Aggregating across folds (computing average of feature importance from all 5 folds) reduces noise and prevents overemphasising spurious features potentially present in individual folds.
+	-	**Results are portfolio-ready**: visualisation clearly communicates results to reviewers.
 **Step 3: Trained Final Deployment-Style Models**
 -	Trained one final model per target (3 total) on the entire 100-patient dataset.
 -	Saved each model (.pkl) for reproducibility and demonstration.
@@ -1641,3 +1642,22 @@ Day 12 - Hyperparameter Tuning, Feature Importance, and Final Models
 	-	Provides transparent, reproducible evidence of methodology.
 	-	Makes the project credible for reviewers, portfolio readers, or recruiters.
 	-	Serves as a baseline for future neural net models, anyone can see exactly how LightGBM performs before moving to more complex models.
+
+### 4 Key Parameters for Hyperparameter Tuning 
+**Decision**:
+- We have a small dataset (100 patients). With complex models or too many trees, overfitting is easy, the model could “memorise” the patients instead of generalising to other patients. That’s why tuning parameters is critical.
+- These 4 parameters are the only ones we tune, because they have the largest impact on performance and stability for our dataset size. 
+- Other parameters (like regularisation terms) are left at defaults to avoid overcomplicating tuning and risking overfitting (learning the training data too well, including noise or random fluctuations, rather than the underlying patterns).
+**4 Key parameters (built in arguments)**:
+1. `learning_rate`
+	-	Controls the step size at each iteration when building trees.
+	-	Balances training speed vs overfitting: too high → may overshoot minima (unstable), too low → slow convergence.
+2. `max_depth` / `num_leaves`
+	-	Limits tree size/complexity.
+	-	Prevents overfitting due to overly complex trees, which is critical for a small dataset (100 patients).
+3. `n_estimators`
+	-	Total number of trees in the ensemble.
+	-	More trees improve model capacity but risk overfitting; fewer trees risk underfitting.
+4. `min_data_in_leaf`
+	-	Minimum samples (number of patients) required in a leaf node.
+	-	Stabilises predictions by preventing leaves with very few samples (avoiding noisy splits).
