@@ -1313,14 +1313,14 @@ Day 11 -
 
 **Distribution Results**
 **Max Risk Distribution (100 patients total):**
-Score 0: 8 patients (8.0%)
+Score 0: 1 patients (1.0%)
 Score 1: 0 patients (0.0%)
-Score 2: 18 patients (18.0%)
-Score 3: 74 patients (74.0%)
+Score 2: 13 patients (13.0%)
+Score 3: 86 patients (86.0%)
 **Median Risk Distribution (100 patients total):**
-Score 0: 84 patients (84.0%)
+Score 0: 76 patients (76.0%)
 Score 1: 0 patients (0.0%)
-Score 2: 16 patients (16.0%)
+Score 2: 24 patients (24.0%)
 Score 3: 0 patients (0.0%). 
 **Percentage Time High Distribution (100 patients total)**
 Basic Statistics:
@@ -1338,55 +1338,224 @@ Potential Issues Identified:
   High proportion of zeros may create prediction challenges
   Non-normal distribution may impact residual patterns. 
 
-**Results with Combined Scoring (0+1 → 1)**
+**Results with Combined Scoring (0+1+2 → 2, 0+1 → 1)**
 **Max Risk Distribution (Combined):**
-Score 1: 8 patients (8.0%) - [was 8 patients with score 0 + 0 patients with score 1]
-Score 2: 18 patients (18.0%) - [unchanged]
-Score 3: 74 patients (74.0%) - [unchanged]
+Score 2: 14 patients (14.0%) - [1 patients with score 0 + 0 patients with score 1 + 13 patients with score 2]
+Score 3: 86 patients (86.0%) - [unchanged]
 **Median Risk Distribution (Combined):**
-Score 1: 84 patients (84.0%) - [was 84 patients with score 0 + 0 patients with score 1]
-Score 2: 16 patients (16.0%) - [unchanged]
+Score 1: 76 patients (76.0%) - [76 patients with score 0 + 0 patients with score 1]
+Score 2: 24 patients (24.0%) - [unchanged]
 Score 3: 0 patients (0.0%) - [unchanged]	
 
 
 ### Conclusions On Patient-Level Data
 **Max Risk**
-- Data decently well distributed
-- If we do a 5-fold CV, some folds may end up with no class 1 examples (because there are only 8 total). But this is not catastrophic. It just means performance on class 1 will be unstable.
-- For more stable per-class results, reduce to 3 folds. 
+- Data not well distributed at all. The class imbalance reflects the clinical reality that most patients requiring intensive monitoring are indeed high-acuity cases.
+- The fundamental issue is that with only 1 patient in the minority class for max_risk, any ML approach will fail.
+- Dataset doesn't contain enough diversity in the max_risk variable to support multiclass learning. This is a data collection issue, not a modeling limitation.
+- We must change from 'three risk levels' to 'high risk vs not high risk', which is clinically relevant and often more actionable than granular risk stratification. 
 **Median Risk**
 - It makes clinical sense that nobody’s median is high-risk, most patients don’t sit at high risk their whole stay. That’s clinically plausible.
-- But from a modeling perspective it’s still heavily imbalanced (84 vs 16), model may literally fail to see class 2 in certain folds → unstable results.
+- But from a modeling perspective it’s still quite imbalanced (76 vs 24).
+- We must stratify KFold in order to make sure there is even distribution.
 - Median risk never reached 3 in this dataset, so we must restrict the class set to [1,2].
-- Frame it as a proof-of-concept, not a strong predictor.
 **Percentage Time High**
 - pct_time_high is continuous and has a good spread across patients.
 - No need to transform pct_time_high for current tree-based model pipeline.
 - Skew and zero inflation are not a major problem in this context.
 - Doing extra preprocessing would add work but minimal benefit.
 **Overall Conclusions**
-- Data distribution is realistic. With 0+1 combined, normal K-Fold 3-fold CV is perfectly fine. pct_time_high is continuous and well-distributed, so orginal 5 folds is perfectly fine, no need for special handling as regression will be stable.
+- Data distribution is realistic. pct_time_high is continuous and well-distributed, so orginal 5 folds is perfectly fine, no need for special handling as regression will be stable. And for max_risk and median_risk, chnaging to binary class sets allows us to keep our original 5-fold StratifiedKFold.
 - Imbalance reflects real clinical distributions, we can still use all three variables, but document this insight into the clinical dataset limitations.
 - The model can learn patterns from this dataset effectively.
 - No longer need to code for new variables and replan outcomes for LightGBM and Neural Network models as we previously thought.
 - Overall we keep all three targets, have both classification and regression tasks, can explain different fold choices per target as a **thoughtful design decision based on data distribution.**
 
 ### Changes We Will Make To `complete_train_lightgbm.py`
-1. **Combining 0+1 into a single “low-risk” class:**
-  - Reasonable simplification for modeling, especially given how few patients originally had score 0-1.
+1. **Simplify to binary classifciation (max_risk):**
+  - Binary classification is most pragmatic, and should produce a robust, clinically interpretable model. 
+  - Converting to "high risk (3) vs not high risk (0,1,2)" gives you 86 vs 14 samples, which is workable for 5-fold CV and potentially more clinically relevant (identifying highest-risk patients) and actionable than trying to distinguish between three risk levels when you barely have data for the lowest category.
+  - Binary risk classification clinically gives decision-making clarity (eliminates intermediate categories), helps prioritise scarce resource allocation, and matches matches hospital binary alert systems.
+  - Statistically, they improve model performance and interpretability:
+    - Binary models typically achieve better discriminative performance than multiclass, ROC-AUC interpretation is straightforward for clinical audiences, sensitivity/specificity trade-offs are easier to optimise for clinical priorities
+    - Feature importance directly answers "what predicts highest risk?", clinical staff can understand model decisions more easily, fewer false positive categories to explain.
+  - This approach transforms a data limitation into a focused, clinically relevant research question.
+1. **Combining 0+1 into a single “low-risk” class (median_risk):**
+  - Reasonable simplification for modeling, especially given how 0 patients originally had score 0.
   - NEWS2 scoring has risk split into low-risk, medium-risk and high-risk, however there is an extra sub-risk within low. If the total NEWS2 score lies within the low-risk range, but any single vital scored a 3, then the risk would be low-medium.
-  - Therefore it would still be reasonable to now combine low-risk (0) and low-medium risk (1) into just low-risk (1), so that medium-risk (2), and high-risk (2) follow.
-2. **Startified K-Fold no longer needed, Regular K-Fold is fine for all datasets:**
-  - The model will still see examples of 1, 2, 3 in some folds and can learn their patterns.
-  - Some folds may not have a rare class (e.g., max risk 0/1), but since those classes are small, the impact on model training is minimal.
-3. **Change N-Fold Strategy**:
-- max_risk (1, 2, 3) → 3-fold CV (to give class 1 a chance to appear in folds).
-- median_risk (1, 2 only, 3 absent) → 3-fold CV (binary classification, minority class represented).
-- pct_time_high (continuous regression) → 5-fold CV (enough data, no class imbalance problem).
-4. **Explicitly encode that only the discrete values [1,2,3] exist:**
-  - The model will be aware all of these values exist even if they don't all appear in the training folds.
-  - The model doesn’t expect anything outside [1,2,3].
-  - Therefore one the model avaluates training data it will be aware of all possible values.
-**Overall issue:** 
-- Folds without rare classes won’t see examples of them, so predictions for those rare classes may be less accurate in that fold. 
-- But given the clinical reality, this is acceptable — it mirrors the rarity of true events.
+  - Preserves clinical reasoning: low-risk and low-medium risk are merged, while medium and high risk remain distinct.
+  - Reduces the chance of empty-class folds that would break training.
+2. **Use StratifiedKFold for classification only (max_risk, median_risk), keep plain KFold for regression (pct_time_high):**
+  - Cleanest solution. This avoids crashes, ensures every fold sees all classes, and doesn’t complicate pipeline with LabelEncoder or LightGBM params (forcing global class encoding)
+  - Regression target pct_time_high uses plain KFold because class distribution isn’t relevant.
+	- Stratification aligns with the small minority classes: even rare events appear in validation, preventing folds without examples of certain classes.
+3. **Keep 5-Fold CV Strategy**:
+  - Why keep 5-fold: statistical reliability, reduce variance, more meaningful evalusation, standard practice. 
+  - max_risk (2, 3) → 5-fold CV (binary classification, minority class adequate to support this).
+  - median_risk (1, 2 only, 3 absent) → 5-fold CV (binary classification, minority class adequate to support this).
+  - pct_time_high (continuous regression) → 5-fold CV (enough data, no class imbalance problem).
+4. **Explicitly encode that only the discrete values [2,3] or [1,2] exist:**
+	- Forces LightGBM to always expect all classes.
+	-	Ensures predict_proba outputs arrays of consistent length across folds.
+	-	Avoids downstream code errors when using np.argmax or other evaluation steps.
+	-	Without this, LightGBM might give inconsistent output shapes.
+**Overall** 
+  - StratifiedKFold introduces slightly artificial folds (slightly less “natural”), but the benefits—avoiding unseen class errors and maintaining output consistency—far outweigh the downside.
+	- This setup makes the pipeline robust and reproducible, even with small or imbalanced clinical datasets.
+
+
+original code:
+model.fit(
+    X_train, y_train,
+    eval_set=[(X_test, y_test)],
+    callbacks=[early_stopping(10), log_evaluation(0)],
+    classes=[0, 1]
+)
+	•	Everything is passed directly into model.fit().
+	•	This is fine for simple cases.
+	•	But it has two issues:
+	1.	Hard-coded classes: Always passes classes=[0, 1], even if you’re training regression (where this argument is invalid).
+	2.	Less flexible: If you want to conditionally add/remove arguments (e.g., only add classes for classification tasks), you’d need messy if/else blocks or duplicated code.
+
+new version:
+fit_params = {
+    "X": X_train,
+    "y": y_train,
+    "eval_set": [(X_test, y_test)],
+    "callbacks": [early_stopping(10), log_evaluation(0)]
+}
+
+if classes is not None:
+    fit_params["classes"] = classes   # only add if relevant
+
+model.fit(**fit_params)
+	1.	Build a dictionary of parameters (fit_params).
+	•	Always include X, y, eval_set, and callbacks (common to all tasks).
+	2.	Only add "classes" if it’s relevant (if classes is not None).
+	•	For classification: classes=[1, 2, 3] (or [0, 1]).
+	•	For regression: skip it entirely, so no error.
+	3.	Call .fit(**fit_params).
+	•	The ** operator unpacks the dictionary into keyword arguments, so Python interprets it as if you wrote the original function call.
+
+
+
+🔹 Current behaviour (preds.round())
+	•	Works fine for binary targets (like your median_risk after 0+1 merge → now [1,2]).
+	•	Actually, LightGBM internally shifts these to [0,1], so rounding makes sense.
+	•	❌ But if you run .round() on multiclass outputs (like max_risk with [1,2,3]):
+	•	predict() returns a matrix of probabilities, e.g. [[0.1, 0.2, 0.7], [0.9, 0.05, 0.05]].
+	•	.round() just rounds the floats (0.1→0, 0.7→1), producing nonsense.
+	•	You’d lose the class structure completely.
+
+✅ Why this is better for you
+	•	median_risk → binary → handled with .round() → preds.round() gives 0/1 labels.
+	•	max_risk → multiclass (3 classes) → handled with argmax → np.argmax(preds, axis=1) picks the predicted class.
+	•	pct_time_high → regression → uses predictions directly.
+  Fallback ensures you don’t crash if a fold happens to only contain one class.
+
+This way, the code automatically adapts to the target type, instead of assuming everything is binary.
+
+right now your block assumes all classifiers are binary and that preds.round() will give the right labels. That’s true for median_risk (binary), but wrong for max_risk (3 classes).
+refactor it so it handles regression, binary classification, and multiclass classification correctly:
+
+
+	•	LGBMClassifier.fit() does not have a classes parameter.
+	•	The classes argument exists in some sklearn workflows (e.g., partial_fit for incremental learners like SGDClassifier), but not in LightGBM.
+	•	So when you pass it inside fit_params, Python throws:
+  TypeError: LGBMClassifier.fit() got an unexpected keyword argument 'classes'
+
+  remove:
+  if classes is not None:
+    fit_params["classes"] = classes  # ❌ LightGBM.fit() does not accept 'classes'
+
+
+
+ValueError: y contains previously unseen labels: [1]
+
+What num_class Actually Does
+	•	num_class tells LightGBM how many classes the training set currently has.
+	•	It doesn’t “register” all possible classes globally across folds.
+
+So if your training fold has only labels [2,3] (because class 1 all fell into the validation fold):
+	•	LightGBM sees 2 classes → maps them internally as [0,1].
+	•	When it sees 1 from validation, it doesn’t know how to map it → error.
+
+Why num_class Isn’t Enough
+	•	num_class=3 just says “if there are 3 classes in this fold, model it as multiclass”.
+	•	It does not guarantee that all 3 labels exist in every fold.
+	•	LightGBM relies on the actual y_train values to build its internal label encoder.
+
+That’s why the crash still happens despite num_class=3.
+
+Use StratifiedKFold for classification only (max_risk, median_risk), keep plain KFold for regression (pct_time_high).
+	•	This avoids crashes, ensures every fold sees all classes, and doesn’t complicate your pipeline with label encoders.
+	•	And it fits neatly with your distribution analysis — the small minority classes are exactly when stratification helps most.
+
+statistical issue (bad but tolerable) vs implementation issue (crash).
+	•	They’re related (both come from rare classes), but one you can “live with,” the other you can’t.
+	•	Normal KFold: okay in theory, but LightGBM breaks if a class is completely absent in training.
+	•	StratifiedKFold: prevents that situation by guaranteeing all classes appear in every fold.
+	•	That’s why, even though performance on rare classes will always be shaky, you still need stratification to stop LightGBM from crashing.
+
+
+	•	LightGBM sees only the training fold.
+	•	If a class appears in validation but is missing from training, the model cannot predict it → crash.
+	•	That’s why even with stratification and num_class, extremely rare classes still create fold-specific problems.
+ StratifiedKFold preserves proportions as best as it can, but with very small classes and integer rounding, some folds may get fewer or zero instances of the rare class.
+
+
+
+ LightGBM Binary vs Multiclass Logic:
+For binary classification, LightGBM expects:
+No num_class parameter (it auto-detects)
+OR num_class=1 (which means "predict probability of positive class")
+Labels should be 0/1
+For multiclass classification, LightGBM expects:
+num_class=k where k = number of classes
+Labels should be 0, 1, 2, ..., k-1
+Your Problem:
+Your median_risk has labels [1, 2], but LightGBM's multiclass expects [0, 1]. When you specify num_class=2, LightGBM assumes 3-class problem with labels [0, 1, 2].
+Use binary classification (recommended)
+elif target_name == "median_risk":
+    # Convert to binary: 1→0 (low risk), 2→1 (high risk)  
+    y_binary = (y == 2).astype(int)
+    model = lgb.LGBMClassifier(random_state=RANDOM_SEED,
+                               class_weight="balanced")  # No num_class needed
+
+
+max_risk change 
+Option 1 (binary classification) is most pragmatic. Converting to "high risk vs not high risk" gives you 81 vs 19 samples, which is sufficient for meaningful ML and probably more clinically actionable than trying to distinguish between three risk levels when you barely have data for the lowest category.
+The fundamental issue is that your dataset doesn't contain enough diversity in the max_risk variable to support multiclass learning. This is a data collection issue, not a modeling limitation.
+
+Statistical Advantages:
+Model Performance:
+Binary models typically achieve better discriminative performance than multiclass
+ROC-AUC interpretation is straightforward for clinical audiences
+Sensitivity/specificity trade-offs are easier to optimize for clinical priorities
+
+Interpretability:
+Feature importance directly answers "what predicts highest risk?"
+Clinical staff can understand model decisions more easily
+Fewer false positive categories to explain
+Your binary framing (81 high-risk vs 19 not-high-risk patients) should produce a robust, clinically interpretable model. The class imbalance reflects the clinical reality that most patients requiring intensive monitoring are indeed high-acuity cases.
+This approach transforms a data limitation into a focused, clinically relevant research question.
+
+so what happened today was wen planned new changes after looking at the datatset, and we didnt use stratified KFold, and also different n_folds 3 for the classifer targets and 5 for regressor, and also combined 0 and 1, we thought this fixes every issue but when we ran the code same issue happened, certain classes didnt turn up in folds, so i then chnaged back to stratified KFolds for the calssifier targets, this still didnt work, i was very confused because the stratification should evenly distribute the sparse data classes, so we thought it was an error with rounding in the internal stratification system, so i changed to 2 fold cv for just max_risk, it still failed, turns out when i implemented code in the script to print out the actual distirbution of values within max_risk and median_risk, it turns out my originally calculated distributions today were wrong, in max_risk, there was actually only 1 patient with a score of 0 (like what was output yesterday in terminal), so even if we did everything we could to try and fix it, the ML model would never have worked, therefore the best decision was to change the classes, and combine 0,1,2 into 2, and so we are only comparing 2 v 3 for max_risk, which means we are comparing high risk vs not high risk which is actually very clinically relevant, so by changing to binary system, same as the binary system of 1, 2 for median_risk (combined 0 and 1 into 1, and also removed 3 because 3 had 0 patients, which makes sense becasue no patient would be high risk for most of their stay) so now that both classifiers were binary systems, we could now change it so that its back to the orignal 5 fold cv for all 3 targets since the dataset now allows us to do this without throwing error and also 5 fold is better than 3 fold so if we can do it of course we will, and we kept the stratified KFold for the classifiers, and standard KFold for the regression. I amde sure to check manually in excel the news2_patient_features.csv file both columns and manually count, and now have a confirmed accurate distribution for my notes, my previous incorrect ways of working out the distribution did not work at all, the LLMs i used could not output the correct summations, that unfortunately let to the orgingal new plan assuming that max_risk could still have 3 classes (1,2,3) like median_risk by combining 0 and 1 into 1, not knowing that there werent enough patients to do the stratified n-fold cv, so now the updated new plan accounts for the new accurate distributions and we made it binary so that there were enough values in each class for us to do an n-fold cv. And finally we were abel to run the code successfulyl and create the 34 files.  
+
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+Early stopping, best iteration is:
+[53]    valid_0's l2: 0.00478248
+Fold 5 score: 0.0048
+
+Average pct_time_high score: 0.0052 ± 0.0020
+
+Training completed! Check saved_models/ folder for outputs.
+
+output in terminal. finally complete 
