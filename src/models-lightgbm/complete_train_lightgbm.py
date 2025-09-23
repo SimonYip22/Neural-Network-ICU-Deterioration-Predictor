@@ -148,17 +148,17 @@ for target_name in TARGETS:                                                     
 
         # Calculate evaluation metric
         if target_name == "pct_time_high":
-            score = metric_fn(y_test, preds)                                                        # Direct MSE calculation for regression
+            score = metric_fn(y_test, preds)                                                        # Direct MSE calculation for regression (1D vector)
         else:
             # Handle different prediction formats for classification
             if preds.ndim > 1 and preds.shape[1] > 1:
-                preds_labels = np.argmax(preds, axis=1)                                             # Convert multiclass probabilities to labels
+                preds_labels = np.argmax(preds, axis=1)                                             # Convert multiclass probabilities to labels. Shape = (n_samples, n_classes) → 2D matrix
             else:
-                preds_labels = preds.round().astype(int)                                            # Convert binary probabilities to 0/1 labels
+                preds_labels = preds.round().astype(int)                                            # Convert binary probabilities to 0/1 labels (1D vector). Model gives probability of the positive class by default.
 
-            # # Fallback for edge case where test fold has only one class
+            # Fallback safety guard for edge case where test fold has only one class
             if metric_fn == roc_auc_score and len(y_test.unique()) == 1:
-                score = accuracy_score(y_test, preds_labels)                                        # Use accuracy when ROC-AUC undefined
+                score = accuracy_score(y_test, preds_labels)                                        # Use accuracy when ROC-AUC undefined because y_test has only one unique value.
                 print(f"  Warning: Only one class in test fold, using accuracy instead of ROC-AUC")
             else:
                 score = metric_fn(y_test, preds_labels)                                             # Standard ROC-AUC calculation
