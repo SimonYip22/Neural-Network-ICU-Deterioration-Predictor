@@ -1657,6 +1657,10 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 -	Recorded final hyperparameter choices, cross-validation scores, and feature importance.
 -	Summarised in training_summary.txt for portfolio inclusion.
 -	Saved visualisations (top features, performance metrics) for presentation.
+- **Outputs**: `training_summary.txt` (single plain-text report, deployment-ready summary)
+  1. How well the model performed (CV mean ± std).
+	2. Which hyperparameters were chosen.
+	3. Which features were most important.
 - **Rationale**:
 	-	Provides transparent, reproducible evidence of methodology.
 	-	Makes the project credible for reviewers, portfolio readers, or recruiters.
