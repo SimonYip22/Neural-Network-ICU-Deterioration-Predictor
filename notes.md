@@ -1595,7 +1595,7 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 
 ---
 
-## Day 12 - Complete Phase 3: Hyperparameter Tuning, Feature Importance, and Deployment-Ready Models
+## Day 12-13 - Complete Phase 3: Hyperparameter Tuning, Feature Importance, and Deployment-Ready Models
 
 ### Goals
 - **Complete all of Phase 3 (steps 8-9)**:
@@ -1614,7 +1614,10 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 -	**Evaluate performance using 5-fold cross-validation**:
 	-	AUROC / accuracy for max_risk and median_risk
 	-	RMSE for pct_time_high
-- **Output**: `best_params.json`
+- **Outputs**: 
+  - 3x `tuning_logs/{target}_tuning_log.csv` (per target containing every parameter sets values and the computed mean score)
+  - 3x `{target}_cv_results.csv` (per target each file contains all 5 fold-level scores for the winning parameter set)
+  - 1x `best_params.json` (dictionary of the best parameter set for every target)
 - **Rationale**:
 	-	Optimises baseline performance without overfitting, especially critical with only 100 patients.
 	-	Ensures that the model is robust, reproducible, and interpretable.
@@ -1625,9 +1628,14 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 -	Identified the top 10 features per target.
 -	Visualised as bar plots for feature importance, aggregated across folds.
 - Script reuses the original "feature importance export" code from `complete_train_lightgbm.py` but instead of per-fold CSVs (15 files), it averages across folds and produces one clean CSV + one plot per target.
-- **Outputs**: 	`*_feature_importance.csv` (averaged across folds, one per target), `*_feature_importance.png` (plots)
+- **Outputs**: 	
+  - 3x `{target}_feature_importance.csv` (ranked list of all features (e.g. resp_rate) with their mean importance, one file per target)
+  - 3x `{target}_feature_importance.png` (one plot per target, horizontal bar chart of top 10 features for visualisation)
 - **Rationale**:
-	-	Highlights which clinical features are driving predictions.
+	-	**Highlights which clinical features are driving predictions**:
+    - High importance score = model relied heavily on that feature.
+    - Low/zero importance = feature contributed little or nothing.
+    - Differences across targets show which predictors matter most for different risk outcomes.
   - Visual outputs make the model interpretable and credible, demonstrates understanding of data, not just coding.
 	-	Aggregating across folds (computing average of feature importance from all 5 folds) reduces noise and prevents overemphasising spurious features potentially present in individual folds.
 	-	**Results are portfolio-ready**: visualisation clearly communicates results to reviewers.
@@ -1635,15 +1643,19 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 **Step 3: Trained Final Deployment-Style Models `train_final_models.py`**
 -	Trained one final model per target (3 total) on the entire 100-patient dataset.
 -	Saved each model (.pkl) for reproducibility and demonstration.
-- **Outputs**: `final_*.pkl` (deployment-ready models, one per target) 
+- **Outputs**: 
+  - `{target}_final_model.pkl.` (deployment-ready models, one per target) 
+    - The full LightGBM model (trees, splits, learned parameters).
+    - Configured with best hyperparameters found during tuning.
+    -	Trained on the entire dataset (not just CV folds).
 - **Rationale**:
 	-	Makes full use of all available data after validation, mimics real-world deployment practice.
 	-	**Produces demonstrable models**: classifier + regressor.
 	-	These models will be used in later stages (e.g., neural network experiments, portfolio demos) and are a polished “deliverable” output.
 
-**Step 4: Documented Everything**
+**Step 4: Documented Everything in Portfolio-Ready Summary `summarise_results.py`**
 -	Recorded final hyperparameter choices, cross-validation scores, and feature importance.
--	Summarised in training_summary.txt or a notebook for portfolio inclusion.
+-	Summarised in training_summary.txt for portfolio inclusion.
 -	Saved visualisations (top features, performance metrics) for presentation.
 - **Rationale**:
 	-	Provides transparent, reproducible evidence of methodology.
@@ -1759,3 +1771,25 @@ src/
 	•	Cons
 	•	Slightly more effort to run and document.
 	•	You’ll need to make sure each script saves/loads from the right place (extra bookkeeping).
+
+
+2. “Adds class_weight=‘balanced’ for classification tasks to handle imbalanced labels”
+	•	In medical datasets, it’s common that one class is much rarer than the other (e.g., only 10% of patients deteriorate vs 90% don’t).
+	•	Without adjustment, the model may get lazy and just predict the majority class.
+	•	class_weight="balanced" tells LightGBM to automatically weight classes inversely proportional to their frequency.
+	•	Rare events get more weight in training.
+	•	Prevents the model from being biased toward the majority.
+	•	This is only applied for classifiers (i.e. max_risk and median_risk).
+	•	For regression (pct_time_high), class_weight doesn’t make sense, so it’s disabled:
+  class_weight="balanced" if target != "pct_time_high" else None
+
+
+This is built into LightGBM. By default, it gives “split importance”, i.e.:
+	•	For each feature, count how many times it was used to split a decision tree.
+	•	Weight this by how much that split improved the model’s loss function.
+	•	Add up across all trees.
+
+👉 So the units are arbitrary scores — not probabilities, not percentages.
+They’re relative values that let you rank features.
+  	•	X-axis (“Importance”): You could make it clearer by labelling:
+"Relative importance (LightGBM split counts)".

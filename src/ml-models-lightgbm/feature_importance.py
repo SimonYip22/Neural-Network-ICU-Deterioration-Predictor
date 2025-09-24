@@ -1,22 +1,30 @@
 """
 feature_importance.py
 
-Title: 
+Title: Feature Importance Analysis and Visualisation Plots
 
 Summary:
-- Loads best hyperparameters per target, trains CV folds, aggregates feature importance
-- Saves CSV and bar plots of top features per target
+- Loads best hyperparameters per target from the tuning stage (best_params.json), trains CV folds, aggregates feature importance by finding the average per target
+- Calculates which features (clinical variables, NEWS2 features, etc.) were most important in predicting the outcomes.
+- Saves CSV and bar plots of top 10 features per target
+- Tells us which clinical features the model relied on the most across targets to drive predictions, and differences across targets show which predictors matter most for different risk outcomes.
 Outputs:
-- 
+- 3x `{target}_feature_importance.csv` (CSV file per target with importance scores for all features e.g. resp_rate ranked by importance)
+- 3x `{target}_feature_importance.png` (bar plots per target of the Top 10 features for quick visualisation)
 """
-
+#-------------------------------------------------------------
+# Imports
+#-------------------------------------------------------------
 import pandas as pd
 import numpy as np
+from sklearn.model_selection import KFold, StratifiedKFold
 import lightgbm as lgb
 from pathlib import Path
 import json
 import matplotlib.pyplot as plt
 
+#-------------------------------------------------------------
+# Directories
 #-------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_PATH = SCRIPT_DIR.parent.parent / "data/processed-data/news2_features_patient.csv"
@@ -33,7 +41,7 @@ RANDOM_SEED = 42
 df = pd.read_csv(DATA_PATH)
 feature_cols = df.drop(columns=["subject_id"] + TARGETS).columns.tolist()
 
-# Load best hyperparameters
+# Load best hyperparameters for each target from tuning
 with open(TUNE_DIR / "best_params.json") as f:
     best_params_all = json.load(f)
 
@@ -59,30 +67,37 @@ for target in TARGETS:
 
     fold_importances = []
 
+    # Train models fold by fold
     for train_idx, test_idx in kf.split(X, y if target != "pct_time_high" else None):
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
+        # Trains model with the best params for this target
         model = model_class(**best_params_all[target], random_state=RANDOM_SEED,
                             class_weight="balanced" if target != "pct_time_high" else None)
         model.fit(X_train, y_train)
+        # Append to list for each fold an array of importance values for each feature
         fold_importances.append(model.feature_importances_)
 
-    # Average feature importance across folds
+    # Average feature importance across folds (stability, avoids one fold bias)
+    # Makes a DataFrame of features ranked by importance score, then sorts by descending
+    # axis=0 means: average column-wise (feature 1’s score is averaged across folds, same for feature 2, etc.)
     mean_importances = np.mean(fold_importances, axis=0)
     feat_df = pd.DataFrame({"feature": feature_cols, "importance": mean_importances})
     feat_df.sort_values(by="importance", ascending=False, inplace=True)
 
-    # Save CSV
+    # Save CSV with all features + their average importance.
     feat_df.to_csv(FEATURE_DIR / f"{target}_feature_importance.csv", index=False)
 
     # Save bar plot
+    # head(10) → take the first 10 rows (top features).
+    # [::-1] → reverse the order so the highest feature appears at the top of the horizontal bar chart.
     plt.figure(figsize=(10,6))
     plt.barh(feat_df['feature'].head(10)[::-1], feat_df['importance'].head(10)[::-1])
-    plt.xlabel("Importance")
-    plt.title(f"Top 10 Features for {target}")
-    plt.tight_layout()
-    plt.savefig(FEATURE_DIR / f"{target}_feature_importance.png")
-    plt.close()
+    plt.xlabel("Relative importance (LightGBM split counts)") # x-axis label
+    plt.title(f"Top 10 Features for {target}") # title with target name 
+    plt.tight_layout() # avoids cutoff text
+    plt.savefig(FEATURE_DIR / f"{target}_feature_importance.png")# saves PNG file
+    plt.close() # closes the figure (no overlap with next loop)
 
 print("Feature importance aggregation complete. Check feature_importance_runs/ folder.")
