@@ -1810,7 +1810,7 @@ src/
   - **Output**: padded sequences ready for temporal modelling.
   -	**Steps**:
     -	Align time windows (e.g. hourly bins).
-    -	**Imputation strategy**: LOCF (last observation carried forward), missingness flags (important clinical signal). These are designed for sequence modelling, not just single-row per patient like the Phase 3 LightGBM dataset.
+    -	**Imputation strategy**: LOCF (last observation carried forward), missingness flags (important clinical signal).
     -	Normalise continuous variables (z-score per feature).
     -	Sequence padding/truncation to fixed length (max ICU stay window).
     -	Train/val/test split by patients (no leakage).
@@ -1859,7 +1859,7 @@ src/
 - Adds weeks, recruiters won’t care as “too much for too little.”
 - Need a polished baseline (LightGBM) + polished deep temporal model (TCN). That contrast is the unique technical story.
 **End Products of Phase 4**
--	3 TCN models (classification + regression) trained + validated.
+-	3 TCN models (2 classification + 1 regression) trained + validated, keep targets constant, only change the modelling approach.
 -	Direct comparison with 3 LightGBM models.
 -	Deployment-style saved models + inference script.
 -	Documentation proving we can take raw messy clinical data → interpretable deep model → fair comparison with classical ML.
@@ -1875,7 +1875,7 @@ src/
 	- **WaveNet-style autoregressive models**: very heavy, Google’s original audio model, impractical for our dataset size.
 	- **Attention-only architectures**: flashy but raise “did he just copy a paper?” questions.
 - These are the ones that would look impressive to a PhD audience but gimmicky / overkill to recruiters, they won’t credit more for using these. They’ll think we're chasing buzzwords instead of showing clinical + ML maturity.
-- **TCN is advanced, technically impressive, clinically relevant, and justified for the dataset**:
+- **TCN is advanced, technically impressive, clinically relevant, and justified for the EHR time-series dataset**:
 	-	**Causal convolutions** → predictions at time t only depend on past, not future.
 	-	**Dilated convolutions** → exponential receptive field, captures long ICU sequences.
 	-	**Parallel training** → faster and more scalable than RNNs.
@@ -1887,15 +1887,44 @@ src/
 3. Demonstrates mastery of temporal modelling architectures (causal dilated convolutions, residual blocks, pooling).
 4. Captures temporal dynamics that LightGBM misses, such as deterioration trends and escalation patterns.
 5. Handles long ICU stays efficiently without vanishing gradient problems.
-6. **Portfolio-ready contrast**: proves I can go beyond classical ML to advanced sequence modelling.
+6. **Portfolio-ready contrast**: proves I can go beyond baseline classical ML to advanced sequence-level modelling.
 7. **Clinician-technologist edge**: shows I can not only build powerful models but also interpret them (via saliency maps).
 
-How Temporal Convolutional Network Works
-	•	Causal convolutions → at each time step, the model only looks backwards in time (no leakage of future info).
-	•	Dilated convolutions → skip connections allow the receptive field to grow exponentially, so the model “sees” long histories without deep stacking.
-	•	Residual blocks → stabilise training, prevent vanishing/exploding gradients.
-	•	Global pooling → compresses the sequence into a single fixed-length representation.
-	•	Output layer → produces prediction:
-	•	Sigmoid for binary risk (max_risk, median_risk).
-	•	Linear for regression (% time high risk).
-	•	Interpretability via saliency → gradient-based methods highlight which features and time steps drove the prediction.
+### How Temporal Convolutional Network (TCN) Works
+**Temporal awareness**:
+-	Causal convolutions → at each time step, the model only looks backwards in time (no data leakage from the future).
+-	Dilated convolutions → skip connections expand the receptive field exponentially, letting the model capture long patient histories without deep stacking (without needing hundreds of layers).
+**Stable training**:
+- Residual blocks → stabilise training, prevent vanishing/exploding gradients, making the deep temporal model easier to optimise.
+**From sequences to predictions**:
+-	Global pooling → compresses the sequence into a single fixed-length representation.
+-	Dense output layer → produces prediction:
+  -	Sigmoid activation → binary classification (max_risk, median_risk).
+  -	Linear activation → regression (pct_time_high).
+-	**Interpretability**: 
+  - Saliency maps (e.g., gradient-based attribution) highlight which time periods and features most influenced the model’s prediction.
+
+
+### What We Did
+**Step 1: Dataset Preparation (Sequential Features)**
+- **Input**: news2_features_timestamp.csv (already produced by make_timestamp_features.py)
+- **Output**: ready-to-train PyTorch-style tensors: (batch, sequence_length, features)
+- **Sub-steps**:
+	1. Align time windows
+    - Decide on fixed time step (e.g., 1 hour bins).
+    - Already aligned in your rolling-window pipeline → so this should be minimal.
+	2. Imputation strategy
+    -	LOCF, missingness flags + carried-forward flags already built
+    -	For TCN, just keep them as input features.
+	3. Normalisation (z-score)
+	  - For continuous variables: compute mean/std from training set, apply to train/val/test.
+    - Requires writing scaling code + testing.
+  4. Sequence padding/truncation
+    - Choose max ICU stay window (e.g., 48h, 72h, 96h).
+    -	Pad shorter sequences with zeros + mask.
+    -	Truncate longer ones.
+    - **Trickiest part, requires careful patient grouping + batching (make sure batches are consistent).**
+	5. Train/val/test split (by patients)
+	  - Ensure no leakage: same patient’s data can’t be in multiple sets.
+    - Stratify if needed (so you don’t end up with all “high risk” in one set).
+- This step is foundational. If dataset prep is wrong, TCN won’t train properly. Once Step 1 is finished, the rest of Phase 4 (model architecture, training, evaluation) flows quickly because the data pipeline is stable.
