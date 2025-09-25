@@ -632,7 +632,7 @@ LightGBM Model (v1)
 4. **Neural Network Model Selection**:
    - **Considered**: LSTM/GRU, Transformers, TCN.  
    - **Decision: TCN** because it handles long sequences efficiently, avoids vanishing gradients, and trains faster than RNNs.  
-   - **Requirements**: sequence padding, normalization, masking for missingness.  
+   - **Requirements**: sequence padding, normalisation, masking for missingness.  
 5. **Started `make_patient_features.py`**:
    - **Step 1**: Load CSV, sort by patient/time.  
    - **Step 2**: Aggregate vitals with `.groupby("subject_id").agg(["median","mean","min","max"])`.  
@@ -1108,6 +1108,12 @@ This makes LightGBM phase complete, credible, and deployment-worthy without unne
 - **Overfitting risk**: with 100 patients, “chasing” tiny gains just makes results unstable and less reproducible.
 - **Time sink**: delays me getting to Neural Nets (the unique, impressive part of your project).
 
+### How Gradient Boosted Decision Tree Model Works
+-	Trees split on feature thresholds.
+-	Each split improves the model’s predictions.
+- Build trees sequentially, each correcting previous errors.
+-	Feature importance = how often (or how much) the model used each feature to reduce errors.
+
 ### What We Did
 **Step 1: Phase 3 Steps 3-7 Completed**
 1. Model Training `complete_train_lightgbm.py`
@@ -1122,7 +1128,7 @@ This makes LightGBM phase complete, credible, and deployment-worthy without unne
 3. Debugging / Checks When Running Script
 	- Multiple crashes due to missing classes in folds (e.g., fold contained only one label).
 	- Verified splits, indices, and LightGBM behaviour.
-**Model Outputs `src/models-lightgbm/saved_models/`**
+**Model Outputs `src/models-lightgbm/baseline_models/`**
 1. 15 trained models (.pkl) → 5 folds × 3 targets → fold-wise trained models. Lets us reload and run predictions on unseen data later.
 2. 3 per-target CV result CSVs (*_cv_results.csv) → fold-wise scores per target. Enables calculation of mean/variance of performance → essential for robust evaluation.
 3. 15 feature importance CSVs (*_fold{fold_idx}_feature_importance.csv) → top features per fold per target. Supports interpretability and clinical storytelling.
@@ -1272,11 +1278,6 @@ Accuracy = (# correct predictions) / (total # predictions)
 - Prepared to reframe project as risk trend prediction rather than rare-event deterioration.
 
 ### Extras / Insights 
-#### How Gradient Boosted Decision Tree Model Works
--	Trees split on feature thresholds.
--	Each split improves the model’s predictions.
-- Build trees sequentially, each correcting previous errors.
--	Feature importance = how often (or how much) the model used each feature to reduce errors.
 #### Portfolio Framing
 - This day highlights resilience and scientific reasoning, not everything in ML runs smoothly, and documenting the “bad days” strengthens credibility.
 - Rare-event prediction wasn’t possible; instead, the model learns risk patterns and trends from NEWS2 data.
@@ -1733,11 +1734,14 @@ src/
     │   └── training_summary.txt
     │
     ├── hyperparameter_tuning_runs/                       # New hyperparameter tuning outputs (Day 12)
-    │   ├── max_risk_cv_results.csv
+    │   ├── max_risk_cv_results.csv                       # Full list of features with their average importance scores.
     │   ├── median_risk_cv_results.csv
     │   ├── pct_time_high_cv_results.csv
-    │   ├── best_params.json
-    │   └── tuning_logs/
+    │   ├── best_params.json                              # key:value pairs of hyperparameters for each target.
+    │   └── tuning_logs/                                  # Tuning logs of mean score for each parameter set per target
+    │       ├── max_risk_tuning_log.csv
+    │       ├── median_risk_tuning_log.csv
+    │       └── pct_time_high_tuning_log.csv
     │
     ├── feature_importance_runs/                          # New feature importance + visualisation outputs (Day 12)
     │   ├── max_risk_feature_importance.csv
@@ -1760,40 +1764,138 @@ src/
     ├── initial_train_lightgbm.py                         # Original test run script 
     └── complete_train_lightgbm.py                        # Original complete baseline CV script 
 ```
-### File Outputs
 
+### Reflection
+#### Challenges
+- **Pipeline complexity**: Having all tasks (tuning, feature importance, training final models) in a single script was messy. Hard to debug and rerun specific stages.
+- **Imbalanced labels**: For classification targets (max_risk, median_risk), the dataset was skewed toward the majority class, risking biased models.
+-	**Feature importance interpretation**: LightGBM’s feature importance scores are relative and not intuitive at first glance. Needed clarity on what the numbers actually mean.
+- **Data/bookkeeping**: Making sure each script loads the correct inputs (params, features, models) required careful folder structuring and output saving.
+#### Solutions
+- **Split into 3 modular scripts**:
+	1. tune_models.py → handles hyperparameter tuning via GridSearch and saves results.
+	2. feature_importance.py → loads best params, generates feature rankings, saves CSV + plots.
+	3. train_final_models.py → trains final LightGBM models with chosen params and saves .pkl.
+- **Class weights for imbalance**: Used class_weight="balanced" for classification tasks. Disabled for regression (pct_time_high).
+- **Clarified feature importance**: Understood that LightGBM uses split importance (counts of feature splits, weighted by improvement in loss, summed across trees). Units are arbitrary but give reliable relative ranking.
+- **Better file management**: Standardized folder paths (PARAMS_DIR, FEATURE_DIR, MODEL_DIR). Each script saves clear, versioned outputs.
+#### Learnings
+-	Clean separation of scripts makes the workflow more professional, reproducible, and maintainable.
+-	Class weighting is essential in medical ML tasks to avoid misleadingly high accuracy on imbalanced data.
+-	Feature importance plots are not absolute measures; they’re relative scores. Useful for ranking, not for clinical interpretation.
+-	Having a consistent naming and folder structure prevents confusion when switching between scripts.
+- **The purpose of this baseline is not to squeeze every last % out of LightGBM, but to create a credible reference point for more advanced models**.
 
-✅ Option 2: Split into 3 smaller scripts
-	1.	tune_models.py → runs GridSearch, saves best_params.json.
-	2.	feature_importance.py → loads best params, produces CSV + plots.
-	3.	train_final_models.py → loads best params, trains final models, saves .pkl.
+### Summary
+- This completes Phase 3: LightGBM Training + Validation. The models are portfolio-ready and serve as the baseline for comparison against neural networks in Phase 4.
+- We have trained, validated, and tuned models, generated outputs (CV results, best params, feature importance, final models) and documentation (notes.md, summaries, plots).
+- Models + outputs + documentation is the baseline, what we show a recruiter in a portfolio to prove I can:
+	- Run a structured ML pipeline,
+	-	Handle imbalanced labels,
+	-	Interpret results
+	-	Save deployment-ready models.
 
-	•	Pros
-	•	Very clean separation: each script has a single responsibility.
-	•	Easier to re-run only what you need (e.g., just re-train final models without re-tuning).
-	•	Looks very professional (modular pipeline).
-	•	Cons
-	•	Slightly more effort to run and document.
-	•	You’ll need to make sure each script saves/loads from the right place (extra bookkeeping).
+---
 
+# Phase 4: Temporal Convolutional Network (TCN) Training + Validation
 
-2. “Adds class_weight=‘balanced’ for classification tasks to handle imbalanced labels”
-	•	In medical datasets, it’s common that one class is much rarer than the other (e.g., only 10% of patients deteriorate vs 90% don’t).
-	•	Without adjustment, the model may get lazy and just predict the majority class.
-	•	class_weight="balanced" tells LightGBM to automatically weight classes inversely proportional to their frequency.
-	•	Rare events get more weight in training.
-	•	Prevents the model from being biased toward the majority.
-	•	This is only applied for classifiers (i.e. max_risk and median_risk).
-	•	For regression (pct_time_high), class_weight doesn’t make sense, so it’s disabled:
-  class_weight="balanced" if target != "pct_time_high" else None
+---
 
+## Day 14 - Start Phase 4: Plan Entire Neural Network Pipeline
 
-This is built into LightGBM. By default, it gives “split importance”, i.e.:
-	•	For each feature, count how many times it was used to split a decision tree.
-	•	Weight this by how much that split improved the model’s loss function.
-	•	Add up across all trees.
+### Phase 4: Temporal Convolutional Network (TCN) Training + Validation (Steps 1-6)
+**Goal: Build, validate, and document a temporal deep learning model (TCN) on sequential EHR features. Directly compare against the Phase 3 LightGBM baseline to demonstrate mastery of both classical ML and modern deep learning.**
+1. **Dataset Preparation (Sequential Features)**
+  - **Input**: timestamp-level EHR data (vitals, labs, obs) `news2_features_timestamp.csv`.
+  - **Output**: padded sequences ready for temporal modelling.
+  -	**Steps**:
+    -	Align time windows (e.g. hourly bins).
+    -	**Imputation strategy**: LOCF (last observation carried forward), missingness flags (important clinical signal). These are designed for sequence modelling, not just single-row per patient like the Phase 3 LightGBM dataset.
+    -	Normalise continuous variables (z-score per feature).
+    -	Sequence padding/truncation to fixed length (max ICU stay window).
+    -	Train/val/test split by patients (no leakage).
+  - **Reasoning**: handling realistic, messy temporal data is my clinical-technologist edge.
+2. **Model Architecture (TCN)**
+	- **Base**: Temporal Convolutional Network (causal dilated 1D convolutions).
+	- **Design**:
+    -	**Input**: batch, sequence_length, features.
+    -	3–4 residual blocks with dilated convolutions.
+    -	Dropout + layer normalisation.
+    -	Global pooling (collapse sequence into fixed vector).
+    -	Dense output layer (sigmoid for binary, linear for regression).
+	-	**Targets**:
+    -	Binary classification → max_risk, median_risk.
+    -	Regression → pct_time_high.
+  - **Reasoning**: TCN is unique, less “cookie-cutter” than LSTM/GRU/Transformer, but still respected. Shows why we picked it (causal, efficient, long receptive field).
+3. **Model Training**
+	- **Loss functions**: Binary cross-entropy (classification), MSE (regression).
+	-	**Class imbalance**: Use pos_weight in BCE loss.
+	-	**Regularisation**: dropout + early stopping on validation AUC/RMSE.
+	-	**Optimiser**: Adam with learning-rate scheduler (reduce on plateau). 
+  - **Reasoning**: Solid, no gimmicks. Shows deep learning maturity (correct loss functions, imbalance handling, monitoring).
+4. **Validation + Evaluation**
+	- **Cross-validation style**: patient-level splits (train/val/test).
+	-	**Metrics**: ROC-AUC, F1, accuracy (classification), RMSE, R² (regression).
+	- **Compare head-to-head**: LightGBM baseline vs. TCN.
+	- **Highlight trade-offs**: performance gains, interpretability loss.
+  - **Reasoning**: Demonstrates scientific discipline. Not “neural nets are better,” but fair baseline comparison.
+5. **Interpretability**
+	-	**Feature/time saliency**: Use integrated gradients or Grad-CAM-style saliency over time steps.
+	-	**Purpose**: Show what time periods/features drive the prediction.
+  - **Reasoning**: clinician-technologist wow factor, not just a black box, but clinically interpretable.
+6. **Model Saving + Deployment-Readiness**
+	-	Save trained TCNs (.pt PyTorch models).
+	-	Save preprocessing pipeline (scalers, padding rules).
+	-	**Export inference script**: given raw EHR time series → returns risk score.
+  - **Reasoning**: we don't just train an ML model, show we know how to package ML into something usable and deployment-ready.
+**Documentation**
+  - **README additions**:
+    -	Clear separation: Phase 3 (LightGBM baseline) vs Phase 4 (TCN).
+    -	Diagram of pipeline (raw EHR → preprocessing → TCN).
+    -	Reflections on interpretability + clinical relevance.
+	- **Notes.md**: Capture debugging lessons (e.g. imputation pitfalls, consciousness bug fix).
+**Why Not Go Further**
+- Do not need ensembling, hyperparameter sweeps, AutoML, Transformers.
+- Adds weeks, recruiters won’t care as “too much for too little.”
+- Need a polished baseline (LightGBM) + polished deep temporal model (TCN). That contrast is the unique technical story.
+**End Products of Phase 4**
+-	3 TCN models (classification + regression) trained + validated.
+-	Direct comparison with 3 LightGBM models.
+-	Deployment-style saved models + inference script.
+-	Documentation proving we can take raw messy clinical data → interpretable deep model → fair comparison with classical ML.
 
-👉 So the units are arbitrary scores — not probabilities, not percentages.
-They’re relative values that let you rank features.
-  	•	X-axis (“Importance”): You could make it clearer by labelling:
-"Relative importance (LightGBM split counts)".
+### Why Temporal Convolutional Network (TCN)?
+- TCN is a modern sequence model that is complex enough to impress recruiters but not so niche or exotic that it looks gimmicky.
+- **Why not other neural networks?**
+  - **LSTM/GRU**: older, sequentially unrolled models → training is slow, vanishing gradients, weaker for long sequences.
+  - **Transformers (BERT-style, GPT-style)**: dominant in NLP, too heavy for our dataset (100 patients, not millions of tokens). Would look like overkill and raise “did we really need this?” questions.
+- **Why not more niche/exotic neural networks?**
+  - **Neural ODEs (Ordinary Differential Equations)**: continuous-time dynamics models. Very niche, rarely used in production.
+	- **Graph Neural Networks (GNNs)**: great if we are model hospital networks or patient similarity graphs, but not necessary for ICU vitals.
+	- **WaveNet-style autoregressive models**: very heavy, Google’s original audio model, impractical for our dataset size.
+	- **Attention-only architectures**: flashy but raise “did he just copy a paper?” questions.
+- These are the ones that would look impressive to a PhD audience but gimmicky / overkill to recruiters, they won’t credit more for using these. They’ll think we're chasing buzzwords instead of showing clinical + ML maturity.
+- **TCN is advanced, technically impressive, clinically relevant, and justified for the dataset**:
+	-	**Causal convolutions** → predictions at time t only depend on past, not future.
+	-	**Dilated convolutions** → exponential receptive field, captures long ICU sequences.
+	-	**Parallel training** → faster and more scalable than RNNs.
+	-	**Strong benchmark in clinical time-series papers** → credible.
+
+### Purpose of Advanced Deep Learning TCN ML Model
+1. Show I can handle sequential EHR data, including missingness, imputation, rolling features, and time alignment.
+2. Provides a state-of-the-art deep learning benchmark for patient deterioration prediction.
+3. Demonstrates mastery of temporal modelling architectures (causal dilated convolutions, residual blocks, pooling).
+4. Captures temporal dynamics that LightGBM misses, such as deterioration trends and escalation patterns.
+5. Handles long ICU stays efficiently without vanishing gradient problems.
+6. **Portfolio-ready contrast**: proves I can go beyond classical ML to advanced sequence modelling.
+7. **Clinician-technologist edge**: shows I can not only build powerful models but also interpret them (via saliency maps).
+
+How Temporal Convolutional Network Works
+	•	Causal convolutions → at each time step, the model only looks backwards in time (no leakage of future info).
+	•	Dilated convolutions → skip connections allow the receptive field to grow exponentially, so the model “sees” long histories without deep stacking.
+	•	Residual blocks → stabilise training, prevent vanishing/exploding gradients.
+	•	Global pooling → compresses the sequence into a single fixed-length representation.
+	•	Output layer → produces prediction:
+	•	Sigmoid for binary risk (max_risk, median_risk).
+	•	Linear for regression (% time high risk).
+	•	Interpretability via saliency → gradient-based methods highlight which features and time steps drove the prediction.
