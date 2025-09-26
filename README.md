@@ -1,4 +1,4 @@
-# Neural Network (TCN) Time-Series ICU Deterioration Predictor (PyTorch & LightGBM) 📈⏱️ 
+# Neural Network (TCN) Time-Series ICU Deterioration Predictor (PyTorch & LightGBM) 📈⏳ 
 
 Python-based ICU deterioration predictor leveraging advanced time-series ML modeling using TCN Neural Network (PyTorch) on timestamp-level vitals and LightGBM on patient-level features, capturing temporal trends, missingness, and sequence dynamics. 
 
@@ -33,7 +33,7 @@ news2_scores.csv
    └─> make_patient_features.py
          ├─ Action:
          │   ├─ Aggregate per patient
-         │   ├─ Compute median, mean, min, max, std per vital
+         │   ├─ Compute median, mean, min, max per vital
          │   └─ Include % missingness per vital
          └─ Output: news2_features_patient.csv
                (ML-ready patient-level summary features)
@@ -41,7 +41,7 @@ news2_scores.csv
 
 # Timestamp features rationale
 - We compute rolling window features over 1h, 4h, and 24h intervals. 
-   - Mean, min, max, and std capture the magnitude and variability of vitals. 
+   - Mean, min, max capture the magnitude and variability of vitals. 
    - Slope gives the trend — whether the vital is rising or falling and how fast. 
    - AUC measures cumulative exposure, i.e., how much and for how long a patient has experienced abnormal values. 
 - These features provide temporal context for the ML model, so it doesn’t just see isolated values but also their trajectory over time.
