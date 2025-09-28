@@ -1308,7 +1308,7 @@ Accuracy = (# correct predictions) / (total # predictions)
 
 ---
 
-## Day 11 - Fixing Class Imbalance and Finalising LightGBM CV
+## Day 11 Notes - Fixing Class Imbalance and Finalising LightGBM CV
 
 ### Goals
 -	Resolve persistent errors in LightGBM training caused by missing classes in folds.
@@ -1596,7 +1596,7 @@ By the end of Day 12, the LightGBM phase will be complete, validated, interpreta
 
 ---
 
-## Day 12-13 - Complete Phase 3: Hyperparameter Tuning, Feature Importance, and Deployment-Ready Models
+## Day 12-13 Notes - Complete Phase 3: Hyperparameter Tuning, Feature Importance, and Deployment-Ready Models
 
 ### Goals
 - **Complete all of Phase 3 (steps 8-9)**:
@@ -1801,19 +1801,20 @@ src/
 
 ---
 
-## Day 14 - Start Phase 4: Plan Entire Neural Network Pipeline
+## Day 14-16 Notes - Start Phase 4: Plan Entire Neural Network Pipeline & Complete Dataset Preparation (Step 1)
 
 ### Phase 4: Temporal Convolutional Network (TCN) Training + Validation (Steps 1-6)
 **Goal: Build, validate, and document a temporal deep learning model (TCN) on sequential EHR features. Directly compare against the Phase 3 LightGBM baseline to demonstrate mastery of both classical ML and modern deep learning.**
 1. **Dataset Preparation (Sequential Features)**
-  - **Input**: timestamp-level EHR data (vitals, labs, obs) `news2_features_timestamp.csv`.
+  - **Input**: timestamp-level EHR data (vitals, labs, obs) `news2_features_timestamp.csv`, `news2_features_patient.csv`
   - **Output**: padded sequences ready for temporal modelling.
   -	**Steps**:
-    -	Align time windows (e.g. hourly bins).
-    -	**Imputation strategy**: LOCF (last observation carried forward), missingness flags (important clinical signal).
-    -	Normalise continuous variables (z-score per feature).
-    -	Sequence padding/truncation to fixed length (max ICU stay window).
-    -	Train/val/test split by patients (no leakage).
+    - Patient-level stratified splits (train/val/test).
+    - Continuous-only z-score scaling (fit on train, applied to val/test).
+    - Binary features preserved
+    - Drop of irrelevant categorical text features.
+    - Conversion to tensors with padding + masks.
+    - Saving scaler + config JSON for reproducibility.
   - **Reasoning**: handling realistic, messy temporal data is my clinical-technologist edge.
 2. **Model Architecture (TCN)**
 	- **Base**: Temporal Convolutional Network (causal dilated 1D convolutions).
@@ -1864,6 +1865,12 @@ src/
 -	Deployment-style saved models + inference script.
 -	Documentation proving we can take raw messy clinical data → interpretable deep model → fair comparison with classical ML.
 
+### Goals
+-	Build a robust, reproducible temporal dataset for TCN training.
+-	**Handle messy timestamp-level EHR data**: missingness, variable-length sequences, mixed-type columns.
+-	Ensure patient-level splits are stratified, reproducible, and free of leakage.
+- Fix prior issues with categorical columns (e.g. consciousness_label) and dtype conversions that caused PyTorch crashes.
+
 ### Why Temporal Convolutional Network (TCN)?
 - TCN is a modern sequence model that is complex enough to impress recruiters but not so niche or exotic that it looks gimmicky.
 - **Why not other neural networks?**
@@ -1904,78 +1911,145 @@ src/
 -	**Interpretability**: 
   - Saliency maps (e.g., gradient-based attribution) highlight which time periods and features most influenced the model’s prediction.
 
-
 ### What We Did
 **Step 1: Dataset Preparation (Sequential Features)**
-- **Input**: news2_features_timestamp.csv (already produced by make_timestamp_features.py)
-- **Output**: ready-to-train PyTorch tensors of shape (batch_size, sequence_length, num_features) and corresponding masks
-- **Sub-steps**:
-	1. Align time windows
-    - Decide on fixed time step (e.g., 1 hour bins).
-    - Rolling-window pipeline already aligns timestamps → minimal adjustments needed.
-    - Confirm that all sequences for a patient are contiguous and correctly ordered by charttime.
-	2. Imputation strategy
-    -	LOCF, missingness flags + carried-forward flags already built
-    -	Keep missingness flags as separate features — TCNs can learn from informative missingness.
-    - Check for remaining NaNs → either leave as zero (if masked) or impute with cohort median if necessary.
-	3. Normalisation (z-score)
-	  - For continuous variables: compute mean/std from training set only, apply z-score transformation to train/val/test sets.
-    - Ensure categorical features (e.g., supplemental O₂ flags) are left unchanged or one-hot encoded if used.
-    - Implement and test scaling carefully to avoid leakage.
-  4. Sequence padding/truncation
-    - Decide on max sequence length based on ICU stay distribution (e.g., 48h, 72h, 96h).
-    - Pad shorter sequences with zeros → include a mask tensor to ignore padded values during loss computation.
-    - Truncate sequences longer than the max length.
-    - Ensure batch consistency: all sequences in a batch should be correctly padded/truncated.
-    - **Trickiest part, requires careful patient grouping + batching (make sure batches are consistent).**
-	5. Train/val/test split (by patients)
-	  - Split at patient-level, never splitting a patient across sets → prevents leakage.
-    - Stratify by outcome (e.g., high-risk deterioration) to avoid class imbalance concentrated in one set.
-    - Verify patient IDs to ensure no overlap across sets.
-- **Notes / Best Practices**:
-	-	Foundational step: If sequences, masks, or scaling are off, the TCN will not learn effectively.
-	-	Once dataset prep is stable, architecture design, training, and evaluation can proceed rapidly.
-	- Keep your data preprocessing code modular: you may need to adjust max_seq_len or features later.
-	-	Maintain train/val/test splits and scaling parameters for reproducibility.
+1. **Setup and Directory Creation**
+	- Imported necessary libraries (pandas, numpy, torch, json, joblib, sklearn).
+  - **Defined input paths**: `news2_features_timestamp.csv` (already produced by make_timestamp_features.py), `news2_features_patient.csv` (to merge outcomes with df)
+  - **Created output directories**:
+    - `prepared_datasets/` → ready-to-train PyTorch sequence tensors of shape (batch_size, max_sequence_length, num_features) and corresponding masks (max_sequence_length,)
+    - `deployment_models/preprocessing/` → preprocessing artifacts (scalers, padding config)
+2. **Step 1: Load Dataset and Sort Chronologically**
+	- Loaded timestamp-level CSV into DataFrame df.
+	-	Sorted by `subject_id` and `charttime` to ensure sequences are in chronological order and each patient’s timepoints are correctly aligned (TCN requires time-ordered sequences).
+	-	Created a copy of the DataFrame to avoid modifying the original CSV.
+3. **Step 2: Merge Patient-Level Outcomes**
+  - Loaded patient-level outcomes CSV (`max_risk, median_risk, pct_time_high`).
+	-	Merged outcomes into the timestamp-level DataFrame by subject_id.
+  - The timestamp dataset does not contain outcomes, merging ensures every row in a patient’s sequence has access to labels for stratification and eventual training.
+4. **Step 3: Convert Targets to Binary for Stratification**
+	-	**Exactly mirrors the LightGBM target binary conversion**: `max_risk_binary` (1 if max_risk > 2, else 0), `median_risk_binary` (1 if median_risk == 2, else 0)
+	-	Binary stratification simplifies patient-level splits.
+	-	Ensures that rare/high-risk outcomes are balanced across train/val/test.
+5. **Step 4: Patient-Level Stratification & Train/Val/Test Split**
+	-	Collected unique patient IDs.
+	-	Created patient-level label by taking the max of `max_risk_binary` per patient, this will be used for stratification of patients into the splits.
+	-	**Split patients**:
+    - **First split**: 70% → train, 30% → temp pool.
+    - **Second split**: temp pool split evenly → 15% val, 15% test.
+  - **Rationale**:
+    - Splitting by patient and not rows prevents data leakage (same patient cannot appear in multiple splits).
+    - Stratification balances rare high-risk cases (prevent class imbalance). Optional if your classes are well-distributed, but for small datasets, stratification is safer to avoid one set being unrepresentative.
+    - Stratification on only one anchor target (`max_risk_binary`) avoids inconsistent splits. Same splits reused for median risk and regression targets.
+    -	Random state fixed for reproducibility
+6. **Step 5: Feature/Target Separation**
+  - Defined id_cols (`subject_id, charttime`) and target_cols (`max_risk, median_risk, pct_time_high`).
+	-	Candidate feature columns = all columns excluding IDs and targets.
+	-	Converted consciousness_label to binary numeric: 0 = Alert, 1 = Not Alert (clinically informative and safe to include).
+	-	Dropped all remaining categorical text columns (risk, monitoring_freq, response, etc.), dropping irrelevant categorical columns prevents PyTorch dtype issues.
+	-	**Split features into**:
+    - Continuous features → for z-score scaling.
+    -	Binary features → no scaling needed.
+7. **Step 6: Normalisation (Z-Score for Continuous Features)**
+  - Apply z-scoring to continuous variables, ensure categorical features are left unchanged.
+  - Fit `StandardScaler()` on training patients only (prevents leakage as all computed mean/std per feature come from only training set), and also transform training set (`.fit_transform()`)
+  - Applied `.transform()` to val/test patients using training stats.
+  - Explicitly converted all continuous and binary columns to float32 (prevent later PyTorch dtype issues).
+  - **Rationale**:
+    - Z-score ensures features are on comparable scales, preserving trends.
+    - Scaled using training stats only avoids information leakage (using information from val/test to influence scaling)
+    - float32 conversion prevents PyTorch crashes (`object dtype → TypeError`).
+8. **Step 7: Grouping into Per-Patient Sequences**
+	-	Grouped DataFrame rows by subject_id.
+	-	Created a 2D NumPy array per patient (timesteps × features).
+  - **Rationale**: 
+    - TCN input requires sequences per patient.
+    -	Maintains temporal ordering and feature consistency.
+9. **Step 8: Sequence Padding/Truncation and Mask Creation**
+	-	**Fixed sequence length**: `MAX_SEQ_LEN = 96` (96h = 4 days, based on ICU stay distribution).
+    -	**For shorter sequences**: padded with zeros.
+    -	**For longer sequences**: truncated to `MAX_SEQ_LEN`.
+	-	**Created corresponding mask array**: (1 → real timestep, 0 → padded timestep).
+	-	`make_patient_tensor(pid)` function converts the NumPy arrays and return PyTorch tensors for the TCN.
+  - **Output shape for every patient tensor**: (`MAX_SEQ_LEN, num_features`) for the sequence tensor, (`MAX_SEQ_LEN,`) for the mask tensor (1D array).
+  - **Rationale**:
+    -	TCNs require uniform input sizes, we chose 96.
+    -	Masks ensure padded timesteps don’t contribute to loss or gradients (will ignore padded values during loss computation).
+10. **Step 9: Save Tensors + Masks**
+	-	**For each split (train, val, test)**:
+    - Stacked the per patient tensors → 3D (`num_patients, MAX_SEQ_LEN, num_features`).
+	-	Saved the 3 sequence tensors + 3 masks tensors to `prepared_datasets/`.
+  - **Rationale**:
+    -	Makes training reproducible and reproducible across multiple runs.
+    -	Separates raw data artifacts (tensors + masks) from deployment artifacts (scalar + padding config).
+11. **Step 10: Save Padding & Feature Configuration**
+  - **Saved `padding_config.json`**:
+```json
+{
+  "max_seq_len": 96,
+  "feature_cols": [...],
+  "target_cols": ["max_risk", "median_risk", "pct_time_high"]
+}
+```
+  - Saved `standard_scaler.pkl` in `deployment_models/preprocessing/` (contains computed mean/std per feature in training set, and z-scale formula).
+  - Provides complete reproducibility for inference on new patient data.
+**Notes / Best Practices**:
+-	**Foundational step**: If sequences, masks, or scaling are off, the TCN will not learn effectively.
+-	Once dataset prep is stable, architecture design, training, and evaluation can proceed rapidly.
+- **Keep data preprocessing code modular**: may need to adjust `MAX_SEQ_LEN` or features later.
+-	Maintain train/val/test splits and scaling parameters for reproducibility.
+**Summary of Changes / Fixes Implemented**
+-	Converted `consciousness_label` to binary to include it safely.
+-	Explicitly cast continuous and binary columns to float32 after scaling.
+-	Dropped irrelevant categorical columns to avoid object dtype issues.
+-	Ensured per-patient sequences are padded/truncated and masks are correctly aligned.
+-	Saved preprocessing objects for reproducibility and deployment.
 
+### Key Transformations
+- **Patient-level split** – train/val/test by `subject_id` to prevent leakage; stratified on `max_risk_binary`.  
+- **Merge patient outcomes** – add `max_risk`, `median_risk`, `pct_time_high` to timestamp-level data.  
+- **Feature cleaning** – drop unused categorical text columns; convert `consciousness_label` to binary.  
+- **Type enforcement** – continuous → `float32`; binary → `float32` to prevent PyTorch errors.  
+- **Z-score normalization** – continuous features scaled using training set stats; applied to val/test.  
+- **Sequence ordering & padding** – sort by `subject_id` + `charttime`; truncate/pad to `MAX_SEQ_LEN`; masks indicate real vs padded timesteps.  
+- **Per-patient sequences** – create 2D arrays `(timesteps × features)` per patient; converted to PyTorch tensors in Step 6.  
+- **Scaler persistence** – `standard_scaler.pkl` stores overall feature mean/std from training set for reproducible preprocessing.  
+- **Output** – tensors `(num_patients, MAX_SEQ_LEN, num_features)` + masks `(num_patients, MAX_SEQ_LEN)` saved for train/val/test.
 
-### Step 1: Dataset Preparation Diagram
-
-Input: news2_features_timestamp.csv
+### Step 1: Dataset Preparation Pipeline
+```text
+Input: news2_features_timestamp.csv, news2_features_patient.csv
         │
         ▼
-Preprocessing:
-- Align time windows (hourly bins)
-- LOCF + missingness flags
-- Z-score normalization (continuous features)
-- Sequence padding/truncation
-- Train/val/test patient-level split
+Preprocessing: prepare_tcn_dataset.py
+- Setup and Directory Creation
+- Load Dataset and Sort Chronologically
+- Merge Patient-Level Outcomes
+- Convert Targets to Binary for Stratification
+- Patient-Level Stratification & Train/Val/Test Split
+- Feature/Target Separation
+- Normalisation (Z-Score for Continuous Features)
+- Grouping into Per-Patient Sequences
+- Padding/Truncation and Mask Creation
         │
         ├───────────────────────────────────────────────┐
         │                                               │
         ▼                                               ▼
-prepared_datasets/                                 deployment_models/scalers/
-- train.pt (tensor: sequences for training)       - standard_scaler.pkl (mean/std from training set)
-- val.pt (tensor: sequences for validation)      - padding_config.json (max_seq_len, padding rules)
-- test.pt (tensor: sequences for testing)        - other preprocessing metadata
-- corresponding masks.pt                          (used for any new data at inference)
-        │
-        ▼
-Used **only during training** for:
-- Model fitting
+Save Tensors + Masks (prepared_datasets/)          Save Padding & Feature Configuration (deployment_models/preprocessing/)
+- train.pt (tensor: sequences for training)        - standard_scaler.pkl (mean/std from training set)
+- val.pt (tensor: sequences for validation)        - padding_config.json (max_seq_len, padding rules)
+- test.pt (tensor: sequences for testing)               │ 
+- corresponding masks.pt                                ▼                
+        │                                          Used only at inference:
+        ▼                                          - Apply same scaling to new patient sequences
+Used only during training for:                     - Apply same padding/truncation rules
+- Model fitting                                    - Ensure input format matches trained TCN
 - Validation
 - Testing
+```
 
-deployment_models/scalers/ is used **only at inference**:
-- Apply same scaling to new patient sequences
-- Apply same padding/truncation rules
-- Ensure input format matches trained TCN
-
-
-### Step 1: Dataset Preparation (Sequential Features)
-Input: news2_features_timestamp.csv
-Output: ready-to-train tensors, masks, scalers/padding rules
-
+### Dataset Preparation Outputs & Purpose
+```text
 ┌─────────────────────────────┐
 │   Training / Validation     │
 │   Usage: during TCN fitting │
@@ -1990,18 +2064,19 @@ src/ml-models-tcn/prepared_datasets/
 ├── test.pt           # Test sequences
 └── test_mask.pt      # Test mask
 
-───────────────────────────────
 ┌─────────────────────────────┐
 │ Deployment / Inference      │
 │ Usage: for scoring new data │
 └─────────────────────────────┘
         │
         ▼
-src/ml-models-tcn/deployment_models/scalers/
+src/ml-models-tcn/deployment_models/preprocessing/
 ├── standard_scaler.pkl      # Z-score scaler (continuous features)
 └── padding_config.json      # Max sequence length, padding value, feature order
+```
 
 ### Folder Structure for Outputs
+```text
 src/ml-models-tcn/
 ├── prepared_datasets/                     # Pure training/validation/test artifacts
 │   ├── train.pt                           # Training sequences tensor (shape: [num_train_patients, seq_len, num_features])
@@ -2012,125 +2087,108 @@ src/ml-models-tcn/
 │   └── test_mask.pt                       # Mask tensor for test set
 │                                          
 ├── deployment_models/                     # Preprocessing artifacts needed to run inference on new data
-│   ├── scalers/                           # Objects to reproduce the same preprocessing at inference
+│   ├── preprocessing/                     # Objects to reproduce the same preprocessing at inference
 │   │   ├── standard_scaler.pkl            # Z-score scaler fitted on training data (mean/std per feature)
 │   │   └── padding_config.json            # Metadata about max sequence length, padding scheme, feature order
 
-**Notes**:
+Notes:
 - All .pt files in prepared_datasets/ are tensors directly used in TCN training.
 - The mask tensors are necessary for handling padded sequences during loss computation.
 - scalers and padding_config go into deployment_models/ because they are part of the pipeline that prepares new, unseen data in exactly the same way as training. They are not training artifacts.
-- **This separation avoids confusion**: training tensors vs preprocessing/deployment metadata.
-- **Summary**:
+- This separation avoids confusion: training tensors vs preprocessing/deployment metadata.
+- Summary:
 	-	Training tensors + masks → prepared_datasets/
 	- Scalers + padding configs → deployment_models/scalers/
-
-
-
-### Key transformations
-	•	Patient-level train/val/test split (by ID) → prevents leakage.
-	•	Imputation / missingness flags → TCN can learn from “informative missingness.”
-	•	Z-score normalization → avoid leakage from test/val sets.
-	•	Padding/truncation → sequences must be uniform length.
-	•	Masks → tell TCN which elements are real vs padded.
-
-### Stratification: binary vs ordinal
-	•	For Step 1 (preparing sequences for TCN), you stratify the train/val/test split by the patient-level outcome to ensure balance.
-	•	Even though TCN uses timestamp features, the output label is still patient-level (max risk, median risk, pct_time_high).
-	•	Use the binary or ordinal label mapping from LightGBM:
-    •	max_risk: 2 (not high) vs 3 (high) → binary
-    •	median_risk: 1 (low) vs 2 (medium) → binary
-	•	Stratification is optional if your classes are well-distributed, but for small datasets like yours, stratification is safer to avoid one set being unrepresentative.
-
-### Model Comparison Summary
-
-| Aspect             | LightGBM                       | Current TCN                            | Full TCN Potential                                      |
-|--------------------|--------------------------------|---------------------------------------|---------------------------------------------------------|
-| **Input**          | Patient-level stats            | Timestamp sequences                    | Timestamp sequences                                     |
-| **Target**         | Patient-level outcome          | Patient-level outcome                  | Per-timestep outcome                                    |
-| **Advantage**      | Baseline, interpretable        | Captures temporal patterns             | Captures temporal patterns + predicts early escalation per hour |
-| **Complexity**     | Low                            | Moderate                               | High                                                    |
-| **Portfolio story**| Baseline                       | Modern deep learning, interpretable    | Advanced temporal model, sequence-level insight         |
-
+```
 
 ### Step 1 Output Artifacts
+```text
+| Artifact               | File Name              | Folder                      | Shape / Type                                   | Purpose                                              |
+|------------------------|------------------------|-----------------------------|------------------------------------------------|------------------------------------------------------|
+| Training tensor        | `train.pt`              | `prepared_datasets/`          | `(num_train_patients, max_seq_len, num_features)` | Model input for training patients                    |
+| Validation tensor      | `val.pt`                | `prepared_datasets/`          | `(num_val_patients, max_seq_len, num_features)`   | Model input for validation patients                  |
+| Test tensor            | `test.pt`               | `prepared_datasets/`          | `(num_test_patients, max_seq_len, num_features)`  | Model input for test patients                        |
+| Training mask          | `train_mask.pt`         | `prepared_datasets/`          | `(num_train_patients, max_seq_len)`               | Mask padded timesteps (1 = real, 0 = padding)        |
+| Validation mask        | `val_mask.pt`           | `prepared_datasets/`          | `(num_val_patients, max_seq_len)`                 | Mask padded timesteps                                |
+| Test mask              | `test_mask.pt`          | `prepared_datasets/`          | `(num_test_patients, max_seq_len)`                | Mask padded timesteps                                |
+| Scaler object          | `standard_scaler.pkl`   | `deployment_models/preprocessing/`  | sklearn StandardScaler object                   | Z-score scaling params (fit on training set only)    |
+| Padding configuration  | `padding_config.json`   | `deployment_models/preprocessing/`  | JSON dict (max_seq_len, feature ordering, etc.) | Reproducibility of preprocessing pipeline            |
 
-| Artifact                            | Folder                        | Purpose                                                       |
-|-------------------------------------|-------------------------------|---------------------------------------------------------------|
-| `train.pt`                          | `prepared_datasets/`          | Tensor of shape `(num_train_patients, max_seq_len, num_features)` |
-| `val.pt`                            | `prepared_datasets/`          | Same for validation patients                                  |
-| `test.pt`                           | `prepared_datasets/`          | Same for test patients                                        |
-| `train_mask.pt`, `val_mask.pt`, `test_mask.pt` | `prepared_datasets/` | Binary masks for padded sequences                             |
-| `standard_scaler.pkl`               | `deployment_models/scalers/`  | Scaler fitted on training features                            |
-| `padding_config.json`               | `deployment_models/scalers/`  | Max sequence length, feature ordering for reproducibility     |
-
-Important: All sequence tensors + masks are in prepared_datasets/.
+**Important**: All sequence tensors + masks are in prepared_datasets/.
 Scalars/configs are in deployment_models/scalers/ because they are needed for inference/deployment, not training data itself.
+```
+
+### Why Patient-Level Outcomes for Current TCN
+#### What we’re doing
+- **Features**: timestamp-level sequences (vitals, labs, missingness) → TCN sees full temporal dynamics.  
+- **Targets**: patient-level outcomes (`max_risk`, `median_risk`, `pct_time_high`).  
+- **Training**: every timestep in a patient’s sequence inherits the same label → TCN maps *whole sequence → patient-level label*.  
+- This is stronger than LightGBM because it is sequence-aware, it can detect temporal patterns (spikes, trends, trajectories) that simple patient-level aggregates cannot.  
+#### Why not per-timestep prediction
+- True sequence-to-sequence TCN would label each timestamp with its own escalation risk (e.g., 1-hour lookahead).  
+- **Delivers richer early-warning outputs, but comes with major challenges**:  
+  - Requires fine-grained labels at each timepoint (rare in ICU data).  
+  - Needs complex evaluation (per-timestep metrics, handling overlapping windows).  
+  - Makes training fragile with only 100 patients → risk of severe overfitting.  
+#### Why patient-level labels are the right choice now
+- **Clinical alignment**: clinicians care if escalation ever happened (max/median risk), not the exact timestamp.  
+- **Data constraints**: per-timestep outcomes are too sparse and noisy for reliable modelling.  
+- **Portfolio clarity (easy-to-explain contrast)**:
+  - **LightGBM**: aggregated features.  
+  - **TCN**: full sequences, but still patient-level labels.  
+- **Recruiter value**: demonstrates temporal modelling without overcomplicating.  
+- **Feasibility**: avoids weeks of extra coding/debugging that add little portfolio benefit.  
+#### Overall summary
+- **TCN adds value**: captures patterns that LightGBM misses, while staying clinically relevant.  
+- **Not full potential**: a sequence-to-sequence setup could deliver per-timestep risk scores, but is impractical here.  
+- **Strategic choice**: safe with sparse data, clean comparison against baseline, portfolio-ready and recruiter-friendly.  
+#### Strategic decision
+- Stick with patient-level TCN outcomes. 
+- **Include in README**: “This model could be extended to per-timestep risk prediction for richer early-warning capability. Due to dataset size and label sparsity, we instead demonstrate the temporal advantage at patient-level outcomes, already surpassing classical ML baselines.”  
+- This shows both awareness of the full TCN potential and strategic judgement in using the right level of complexity for the dataset and portfolio.  
+
+### Model Comparison Summary
+```text
+| Aspect                | LightGBM (Classical ML)                   | Current TCN                               | Full TCN Potential                            |
+|-----------------------|-------------------------------------------|-------------------------------------------|-----------------------------------------------|
+| Input data format     | Patient-level aggregate stats              | Timestamp sequences (padded)               | Timestamp sequences (padded)                  |
+| Input source          | news2_features_patient.csv                 | news2_features_timestamp.csv               | news2_features_timestamp.csv                  |
+| Target variables      | max_risk, median_risk, % time high risk    | max_risk, median_risk, % time high risk    | Per-timestep risk (hourly escalation)         |
+| Features used         | Mean, median, min, max, % missingness      | Vitals/labs with LOCF + missingness flags  | Same + explicit per-timestep outcomes         |
+| Temporal handling     | None (static aggregates)                   | Temporal dynamics via dilated convolutions | Temporal dynamics + early warning predictions |
+| Interpretability      | Feature importance (tabular, transparent) | Saliency maps over features & time         | Saliency + sequence-level attributions        |
+| Complexity            | Low                                        | Moderate                                   | High                                          |
+| Advantage             | Strong, credible baseline                  | Captures deterioration trajectories        | Captures trajectories + predicts escalation   |
+| Portfolio story       | Shows baseline competency                  | Shows deep learning maturity               | Shows advanced temporal modelling edge        |
+```
+
+### Reflection
+#### Challenges
+- **Sequence-to-patient vs per-timestep labels**: Our TCN currently maps full timestamp sequences to patient-level outcomes (`max_risk`, `median_risk`, `pct_time_high`). While more powerful than LightGBM, it does not exploit full sequence-to-sequence prediction. Per-timestep prediction could provide richer early-warning outputs but requires far more complex label preparation, masking, and evaluation logic.
+- **Data sparsity**: ICU dataset (100 patients) makes per-timestep labels sparse, noisy, and unreliable. Attempting sequence-to-sequence modelling could lead to overfitting and unstable training.
+- **Patient-level stratification**: Stratifying on multiple targets simultaneously is infeasible. Choosing a single "anchor" (`max_risk_binary`) preserves class balance but leaves median risk slightly imbalanced.
+- **Categorical columns causing errors**: Columns like `consciousness_label`, `co2_retainer_label`, `risk`, and `monitoring_freq` caused PyTorch conversion errors due to object dtype.
+- **Object dtype in numeric arrays**: Even after selecting continuous and binary columns, some columns (binary stored as object or mixed NaNs) caused `TypeError` when converting to PyTorch tensors.
+- **Pipeline complexity**: Aligning train/val/test splits, scaling, per-patient sequences, padding, and masks correctly was essential to avoid subtle bugs.
+#### Solutions and Learnings
+- **Patient-level splits**: Stratified on `max_risk_binary` to maintain class balance, then reused same patient splits for median and regression outcomes. Prevented leakage by splitting by patient ID.
+- **Merging outcomes**: Patient-level labels (`max_risk`, `median_risk`, `pct_time_high`) merged into timestamp-level data before feature selection and tensor creation.
+- **Feature cleaning**: Dropped irrelevant categorical text columns. Converted `consciousness_label` to binary (0 = Alert, 1 = Not Alert) for clinical signal; other categorical columns were constant or redundant.
+```python
+df["consciousness_label"] = df["consciousness_label"].apply(lambda x: 0 if x == "Alert" else 1)
+```
+- **Type enforcement**: Explicitly cast continuous and binary columns to `float32` after z-score normalization to prevent PyTorch errors:
+```python
+df[continuous_cols] = df[continuous_cols].astype(np.float32)
+df[binary_cols] = df[binary_cols].astype(np.float32)
+```
+- **Z-score normalisation**: Applied per feature using training set stats only; validation/test sets transformed using training means/stds to prevent leakage. Patterns are preserved, only scale changes.
+- **Per-patient sequences and padding**: Sorted by subject_id + charttime. Sequences truncated/padded to MAX_SEQ_LEN = 96. Masks indicate real vs padded timesteps for TCN to ignore padding.
+- **Tensor creation**: Conversion to PyTorch tensors occurs in make_patient_tensor() (Step 6), producing (MAX_SEQ_LEN, num_features) for sequences and (MAX_SEQ_LEN,) for masks.
+- **Scaler persistence**: standard_scaler.pkl stores global means/stds per feature (training set), not per patient, ensuring reproducible preprocessing for inference.
+
+---
+
+## Day 17 Notes - Continue Phase 4: Model Architecture (Step 2)
 
 
-1. What we’re doing now
-	•	Features: timestamp-level sequences → TCN sees full time series, trends, sudden spikes, missingness patterns.
-	•	Targets: still patient-level outcomes (max_risk, median_risk, pct_time_high).
-	•	Every timestep in the sequence inherits the same label.
-	•	That means the network is trained to map sequences → patient-level labels.
-
-✅ This is still more powerful than LightGBM because:
-	•	LightGBM sees only aggregated statistics (median, max, min) per patient.
-	•	TCN is “sequence-aware” and can learn temporal dynamics, early deterioration patterns, or sequences that consistently precede high-risk states.
-
-2. Why we’re limited
-	•	The TCN isn’t predicting per-timestep risk yet.
-	•	If you wanted, you could label each timestamp with its instantaneous risk (e.g., 1-hour lookahead) and train TCN to predict future deterioration at each timepoint.
-	•	That would make it a true sequence-to-sequence problem, giving richer outputs than LightGBM.
-  •	That’s closer to what the TCN is fully capable of, but it’s more complex:
-    •	You need fine-grained labels at each time point.
-    •	You need more sophisticated evaluation metrics.
-    •	You need careful handling of overlapping windows and missingness.
-
-3. Why we stick to patient-level outcomes for now
-	•	Clinical relevance: max_risk and median_risk are what clinicians actually care about — “Did this patient escalate at any point?”
-	•	Data limitations: ICU datasets are small (here ~100 patients), per-timestep labels are noisy, incomplete, or unreliable in ICU datasets.
-	•	Portfolio clarity: contrasting LightGBM (patient-level stats) vs TCN (sequence-aware but same labels) is a clear, digestible story.
-	•	Recruiter-friendly: shows you know temporal modelling without overcomplicating with sequence-to-sequence prediction, which is harder to explain and validate.
-  •	Feasibility: Fully exploiting TCN (sequence-to-sequence) requires more coding, debugging, and data preparation.
-
-4. Bottom line
-	•	TCN does add value: it can capture temporal trends and subtle patterns that aggregated LightGBM features cannot.
-	•	We aren’t fully exploiting TCN if our label is patient-level (sequence-to-patient prediction), but it’s a strategic choice:
-    •	Safe with sparse data
-    •	Clear comparison to baseline
-    •	Still demonstrates temporal modelling expertise
-    •	Portfolio-ready.
-  •	Full potential TCN: sequence-to-sequence (per-timestep) prediction.
-    •	Could outperform LightGBM even more.
-    •	More realistic clinically if you want early-warning at each timestep.
-    •	Optional “future extension” for portfolio or paper-level sophistication.
-
-
-
-1. What matters for your project
-	•	Show mastery of messy, real clinical data: timestamp alignment, LOCF, missingness flags.
-	•	Demonstrate technical sophistication: causal dilated convolutions, masking, temporal pooling.
-	•	Show comparison with classical ML: contrast TCN vs LightGBM on patient-level outcomes.
-	•	Keep it interpretable and clean: Grad-CAM/IG saliency maps can highlight which vitals/time windows matter.
-
-✅ All of the above can be achieved without full sequence-to-sequence predictions. You already capture temporal patterns at the patient level.
-
-2. Why not full TCN potential
-	•	Data limitations: 100 patients → per-timestep labels will be extremely sparse. Hard to train and easy to overfit.
-	•	Complexity: Much more code, debugging, masking, overlapping windows, evaluation metrics.
-	•	Portfolio vs recruiter value: Recruiters and interviewers will not care about sequence-level predictions — they care that you:
-	1.	Handled messy timestamped EHR data.
-	2.	Built a sequence model that captures dynamics.
-	3.	Compared it properly to a classical baseline.
-	•	Time: Could add weeks without meaningful additional value.
-
-3. Strategic recommendation
-	•	Stick with patient-level TCN outcomes, exactly as you’re doing now.
-	•	Optional “mention of full potential”: In your README/notes.md, you can say:
-“The TCN could be extended to predict risk at every time step, potentially improving early-warning capability. Due to dataset size and label sparsity, we demonstrate the temporal advantage at patient-level outcomes, which already surpasses LightGBM in capturing temporal dynamics.”
-	•	This shows you understand the full technical landscape, without overcomplicating the project or introducing unnecessary risks.
-
-✅ Conclusion
-	•	Current plan = optimal for your portfolio: sequence-aware deep learning, interpretable, clinically relevant, and feasible.
-	•	Full TCN potential = nice-to-know, not portfolio-essential. Only pursue if you want an academic extension or publication.
