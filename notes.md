@@ -2102,7 +2102,7 @@ Notes:
 ```
 
 ### Step 1 Output Artifacts
-```text
+
 | Artifact               | File Name              | Folder                      | Shape / Type                                   | Purpose                                              |
 |------------------------|------------------------|-----------------------------|------------------------------------------------|------------------------------------------------------|
 | Training tensor        | `train.pt`              | `prepared_datasets/`          | `(num_train_patients, max_seq_len, num_features)` | Model input for training patients                    |
@@ -2116,7 +2116,7 @@ Notes:
 
 **Important**: All sequence tensors + masks are in prepared_datasets/.
 Scalars/configs are in deployment_models/scalers/ because they are needed for inference/deployment, not training data itself.
-```
+
 
 ### Why Patient-Level Outcomes for Current TCN
 #### What we’re doing
@@ -2148,7 +2148,7 @@ Scalars/configs are in deployment_models/scalers/ because they are needed for in
 - This shows both awareness of the full TCN potential and strategic judgement in using the right level of complexity for the dataset and portfolio.  
 
 ### Model Comparison Summary
-```text
+
 | Aspect                | LightGBM (Classical ML)                   | Current TCN                               | Full TCN Potential                            |
 |-----------------------|-------------------------------------------|-------------------------------------------|-----------------------------------------------|
 | Input data format     | Patient-level aggregate stats              | Timestamp sequences (padded)               | Timestamp sequences (padded)                  |
@@ -2160,7 +2160,7 @@ Scalars/configs are in deployment_models/scalers/ because they are needed for in
 | Complexity            | Low                                        | Moderate                                   | High                                          |
 | Advantage             | Strong, credible baseline                  | Captures deterioration trajectories        | Captures trajectories + predicts escalation   |
 | Portfolio story       | Shows baseline competency                  | Shows deep learning maturity               | Shows advanced temporal modelling edge        |
-```
+
 
 ### Reflection
 #### Challenges
@@ -2190,5 +2190,7 @@ df[binary_cols] = df[binary_cols].astype(np.float32)
 ---
 
 ## Day 17 Notes - Continue Phase 4: Model Architecture (Step 2)
+
+
 
 
