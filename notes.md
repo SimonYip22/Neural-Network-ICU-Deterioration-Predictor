@@ -1394,42 +1394,60 @@ Final Output: 34 files in saved_models/
  - 1 training summary log (training_summary.txt)
  ```
 
-### Checking Patient-Level Data 
-**Distribution Results**
-**Max Risk Distribution (100 patients total):**
-Score 0: 1 patients (1.0%)
-Score 1: 0 patients (0.0%)
-Score 2: 13 patients (13.0%)
-Score 3: 86 patients (86.0%)
-**Median Risk Distribution (100 patients total):**
-Score 0: 76 patients (76.0%)
-Score 1: 0 patients (0.0%)
-Score 2: 24 patients (24.0%)
-Score 3: 0 patients (0.0%). 
-**Percentage Time High Distribution (100 patients total)**
-*Basic Statistics:*
-  - Range: 0.0000 to 0.4407 (0% to 44.1% time in high-risk state)
-  - Mean: 0.1114 (11.1%)
-  - Standard deviation: 0.1040
-  - Median: 0.0802 (8.0%)
-*Critical Distribution Issues:*
-  - High Zero Inflation: 27% of patients have exactly 0% time in high-risk state
-  - Right-Skewed Distribution: Skewness = 1.24 (moderate positive skew)
-  - High Variability: Coefficient of variation = 0.93
-*Regression Suitability:* **MODERATE**
-*Potential Issues Identified:*
-  - Moderately skewed distribution (could affect MSE optimization)
-  - High proportion of zeros may create prediction challenges
-  - Non-normal distribution may impact residual patterns. 
+### Patient-Level Data Distribution Results
+#### Max Risk Distribution (100 patients total)
+| Score | Patients | Percentage |
+|-------|----------|------------|
+| 0     | 1        | 1.0%       |
+| 1     | 0        | 0.0%       |
+| 2     | 13       | 13.0%      |
+| 3     | 86       | 86.0%      |
 
-**Results with Combined Scoring (0+1+2 → 2, 0+1 → 1)**
-**Max Risk Distribution (Combined):**
-Score 2: 14 patients (14.0%) - [1 patients with score 0 + 0 patients with score 1 + 13 patients with score 2]
-Score 3: 86 patients (86.0%) - [unchanged]
-**Median Risk Distribution (Combined):**
-Score 1: 76 patients (76.0%) - [76 patients with score 0 + 0 patients with score 1]
-Score 2: 24 patients (24.0%) - [unchanged]
-Score 3: 0 patients (0.0%) - [unchanged]	
+#### Median Risk Distribution (100 patients total)
+| Score | Patients | Percentage |
+|-------|----------|------------|
+| 0     | 76       | 76.0%      |
+| 1     | 0        | 0.0%       |
+| 2     | 24       | 24.0%      |
+| 3     | 0        | 0.0%       |
+
+#### Percentage Time High Distribution (100 patients total)
+**Basic Statistics**
+| Metric                  | Value          |
+|--------------------------|----------------|
+| Range                   | 0.0000 – 0.4407 (0% – 44.1%) |
+| Mean                    | 0.1114 (11.1%) |
+| Standard Deviation      | 0.1040         |
+| Median                  | 0.0802 (8.0%)  |
+
+**Critical Distribution Issues**
+| Issue                     | Details                                |
+|----------------------------|----------------------------------------|
+| High Zero Inflation        | 27% of patients have 0% time in high-risk |
+| Right-Skewed Distribution | Skewness = 1.24 (moderate positive skew) |
+| High Variability           | Coefficient of variation = 0.93        |
+
+**Regression Suitability**: **MODERATE**
+
+**Potential Issues**
+- Moderately skewed distribution (may affect MSE optimization).  
+- High proportion of zeros → prediction challenges.  
+- Non-normal distribution may impact residual patterns.  
+
+
+#### Results with Combined Scoring
+**Max Risk Distribution (Combined 0+1+2 → 2)**
+| Score | Patients | Percentage | Notes |
+|-------|----------|------------|-------|
+| 2     | 14       | 14.0%      | (1 from score 0 + 0 from score 1 + 13 from score 2) |
+| 3     | 86       | 86.0%      | Unchanged |
+
+**Median Risk Distribution (Combined 0+1 → 1)**
+| Score | Patients | Percentage | Notes |
+|-------|----------|------------|-------|
+| 1     | 76       | 76.0%      | (76 from score 0 + 0 from score 1) |
+| 2     | 24       | 24.0%      | Unchanged |
+| 3     | 0        | 0.0%       | Unchanged |
 
 
 ### Conclusions On Patient-Level Data
