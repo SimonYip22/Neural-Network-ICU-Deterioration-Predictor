@@ -1930,7 +1930,7 @@ src/
   - Saliency maps (e.g., gradient-based attribution) highlight which time periods and features most influenced the model’s prediction.
 
 ### What We Did
-**Step 1: Dataset Preparation (Sequential Features)**
+**Step 1: Dataset Preparation (Sequential Features) `prepare_tcn_dataset.py`**
 1. **Setup and Directory Creation**
 	- Imported necessary libraries (pandas, numpy, torch, json, joblib, sklearn).
   - **Defined input paths**: `news2_features_timestamp.csv` (already produced by make_timestamp_features.py), `news2_features_patient.csv` (to merge outcomes with df)
@@ -2209,6 +2209,52 @@ df[binary_cols] = df[binary_cols].astype(np.float32)
 
 ## Day 17 Notes - Continue Phase 4: Model Architecture (Step 2)
 
+### What We Did
+**Step 2: Model Architecture (TCN)**
+1. Define Input/Output Shapes
+	•	Input tensor: (batch_size, seq_len, num_features)
+	•	Already prepared in Step 1 (padded sequences + masks).
+	•	Output tensor:
+	•	Binary classification → (batch_size, 1) probability of escalation (sigmoid).
+	•	Regression → (batch_size, 1) continuous output for pct_time_high.
 
+
+2. TCN Core Blocks
+	•	Causal dilated 1D convolutions: ensure predictions only depend on past data.
+	•	Residual connections: stabilise training and prevent vanishing gradients.
+	•	Stacked layers: 3–4 blocks with increasing dilation rates (1, 2, 4, 8).
+	•	Dropout + layer norm: regularisation and stabilisation.
+
+
+3. Sequence-to-Patient Collapse
+	•	Global average pooling over time dimension → (batch_size, feature_dim).
+	•	Alternative: global max pooling (test both in ablation).
+	•	Purpose: summarises entire patient trajectory into one vector for classification/regression.
+
+
+4. Output Layers
+	•	Dense → Sigmoid for classification (max_risk, median_risk).
+	•	Dense → Linear for regression (pct_time_high).
+
+
+5. Masking Strategy
+	•	You already created mask tensors during Step 1.
+	•	Apply mask before pooling so padded timesteps don’t contaminate patient representation.
+
+
+6. Training Considerations
+	•	Losses:
+	•	Binary cross-entropy (classification).
+	•	MSE (regression).
+	•	Imbalance: use pos_weight in BCE for skewed max_risk.
+	•	Optimiser: Adam + learning rate scheduler.
+	•	Regularisation: Dropout (0.2–0.3) + early stopping.
+
+**Deliverables**
+	•	A tcn_model.py file defining:
+    •	TemporalBlock (dilated conv + residual).
+    •	TCNModel (stacked blocks + pooling + dense head).
+	•	Unit test with dummy data
+  •	Confirm masking works (padded timesteps ignored).
 
 
