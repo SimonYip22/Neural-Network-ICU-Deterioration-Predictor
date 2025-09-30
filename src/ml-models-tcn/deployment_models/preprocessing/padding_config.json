@@ -1,7 +1,6 @@
 {
   "max_seq_len": 96,
   "feature_cols": [
-    "stay_id",
     "ART BP Systolic",
     "GCS - Eye Opening",
     "GCS - Motor Response",
@@ -172,9 +171,7 @@
     "systolic_bp_missing_pct",
     "heart_rate_missing_pct",
     "level_of_consciousness_missing_pct",
-    "co2_retainer_missing_pct",
-    "max_risk_binary",
-    "median_risk_binary"
+    "co2_retainer_missing_pct"
   ],
   "target_cols": [
     "max_risk",

@@ -124,11 +124,12 @@ print("[INFO] Stratification preserved binary balance across splits.")
 #-------------------------------------------------------------
 # Decide which columns will be inputs into the model and which are not, then we group the dataframe rows by patient into sequences.
 # Columns we do NOT want to treat as model inputs
-id_cols = ["subject_id", "charttime"]
+id_cols = ["subject_id", "stay_id", "charttime"]
 target_cols = ["max_risk", "median_risk", "pct_time_high"]
+extra_target_cols = ["max_risk_binary", "median_risk_binary"] # added binary versions for stratification
 
 # Identify all columns excluding patient IDs, timestamps, outcomes)
-candidate_cols = [c for c in df.columns if c not in id_cols + target_cols]
+candidate_cols = [c for c in df.columns if c not in id_cols + target_cols + extra_target_cols]
 
 # Convert consciousness_label to binary numeric (0 = Alert, 1 = Not Alert) as it is the only categorical label we want to keep
 df["consciousness_label"] = df["consciousness_label"].apply(lambda x: 0 if x == "Alert" else 1)

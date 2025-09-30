@@ -77,6 +77,7 @@ class CausalConv1d(nn.Module):
 A TemporalBlock is like one “unit” in the TCN stack, each block has: 
 - 2 causal convolutions (so it looks back in time only)
 - LayerNorm (normalisation to stabilise training)
+- Activation (ReLU)
 - Dropout (to avoid overfitting)
 - Skip connection (residual) to prevent vanishing gradients.
 """
@@ -121,6 +122,7 @@ class TemporalBlock(nn.Module):
     # -------------------------------------------------------------
     # Forward pass
     # -------------------------------------------------------------
+    # This block takes in a sequence (B, C_in, L), transforms it with 2 convolutions + normalisation + activation + dropout, then adds the original input back (residual), outputting (B, C_out, L)
     # Save the original input → we’ll add it back later (residual connection).
     def forward(self, x):
         # input (x): (B, C_in, L) (batch, channels, seq_len)
@@ -164,7 +166,9 @@ class TemporalBlock(nn.Module):
 # Then pools across time → dense head(s) for classification/regression.
 class TCNModel(nn.Module):
     """
-    Stacked TCN with masked global pooling and heads for classification/regression.
+    Full TCN that takes the sequential ICU data and produces patient-level predictions: classification and regression.
+    Stacks multiple TemporalBlocks (residual blocks with causal convolutions) with exponentially increasing dilation. 
+    Then pools across time (masked global pooling), and optionally applies a dense layer (dense heads) before producing the task-specific outputs (classification/regression).
 
     Args:
         num_features: input feature dimension
@@ -174,13 +178,17 @@ class TCNModel(nn.Module):
         head_hidden: hidden units in final dense head (optional)
     """
 
+    # -------------------------------------------------------------
+    # Initialisation
+    # -------------------------------------------------------------
     def __init__(
+        # ---- Input parameters ----
         self,
-        num_features: int,                       # number of input variables per timestep
-        num_channels: list = [64, 128, 128],     # hidden channel sizes for blocks
-        kernel_size: int = 3,                    # convolution kernel width
-        dropout: float = 0.2,
-        head_hidden: Optional[int] = 64,         # optional dense hidden layer before outputs
+        num_features: int,                       # number of input variables (features) per timestep
+        num_channels: list = [64, 128, 128],     # number of output channels for each TemporalBlock
+        kernel_size: int = 3,                    # convolution kernel width (number of timesteps each kernel sees locally)
+        dropout: float = 0.2,                    # dropout rate, probability of randomly zeroing an activation during training (regularisation)                     
+        head_hidden: Optional[int] = 64,         # optional dense hidden layer size before outputs
     ):
         super().__init__()
         self.num_features = num_features
@@ -191,19 +199,21 @@ class TCNModel(nn.Module):
         in_ch = num_features
         # dilation doubling per block
         for i, out_ch in enumerate(num_channels):
-            dilation = 2 ** i   # 1, 2, 4, ... doubles receptive field each block
+            dilation = 2 ** i                   # 1, 2, 4, ... doubles receptive field each block, exponential growth (deeper blocks see longer history without huge kernels)
             tb = TemporalBlock(in_ch, out_ch, kernel_size=kernel_size, dilation=dilation, dropout=dropout)
             layers.append(tb)
             in_ch = out_ch
-        self.tcn = nn.Sequential(*layers)
-        self.feature_dim = num_channels[-1]     # last block output size
+        self.tcn = nn.Sequential(*layers)       # stacks blocks so the output of one block feeds into the next.
+        self.feature_dim = num_channels[-1]     # last block output size (number of channels from the last block), used for dense head / output layers.
 
         # ---- Optional dense head shared by classification/regression (we return logits) ----
+        # Optional layer to mix temporal features across channels and adds non-linearity before task-specific outputs.
+        # Linear → ReLU → Dropout.
         if head_hidden is not None:
-            self.head = nn.Sequential(
+            self.head = nn.Sequential(                         # Adds a small fully connected layer to combine learned temporal features before producing the final outputs.
                 nn.Linear(self.feature_dim, head_hidden),
-                nn.ReLU(),
-                nn.Dropout(dropout),
+                nn.ReLU(),                                     # ReLU activation adds non-linearity.                    
+                nn.Dropout(dropout),                           # Dropout prevents overfitting.
             )
             head_out_dim = head_hidden
         else:
@@ -211,17 +221,26 @@ class TCNModel(nn.Module):
             head_out_dim = self.feature_dim
 
         # ---- Task-specific heads separate final linear layers ----
-        self.classifier = nn.Linear(head_out_dim, 1)   # binary classification (logit)
-        self.regressor = nn.Linear(head_out_dim, 1)    # regression (pct_time_high)
+        # Each head is a a final linear layer, outputs a single value per patient:
+        self.classifier_max = nn.Linear(head_out_dim, 1)
+        self.classifier_median = nn.Linear(head_out_dim, 1)         # binary classification (logit for BCE loss)
+        
+        self.regressor = nn.Linear(head_out_dim, 1)                 # regression: continuous risk fraction (pct_time_high)
 
     # ---------------------------------------------------------
-    # Step 4: Masked pooling
+    # Step 4: Masked Mean Pooling
     # ---------------------------------------------------------
     def masked_mean_pool(self, x: torch.Tensor, mask: torch.Tensor, eps: float = 1e-6):
         """
-        Pool across time but ignore padding.
+        ICU sequences have different lengths → some timesteps are padding
+        Masked pooling ensures only real timesteps contribute to the patient-level representation.
+        Computes the mean across time ignoring padded timesteps, accounts for variable-length sequences.
+
         x: (B, L, C)
         mask: (B, L) with 1=real timestep, 0=padding
+        Output: (B, C_last) → a single vector per patient summarising temporal features into one.
+
+        Converts variable-length sequences into a fixed-size patient-level feature vector for downstream prediction.
         """
         mask = mask.unsqueeze(-1)                  # (batch, seq_len, 1)
         x_masked = x * mask                        # zero out padded timesteps
@@ -243,35 +262,41 @@ class TCNModel(nn.Module):
         Returns: 
             dict {'logit': (batch,) tensor, 'regression': (batch,) tensor}
         """
-        # Permute to (batch, channels, seq_len) for Conv1d
+        # We start with (B, L, F) (timesteps last) and permute → (batch, channels, seq_len) for Conv1d (PyTorch expects)
         # Input: x = (B, L, F), mask = (B, L)
         x_in = x.permute(0, 2, 1)   # (B, F, L) for Conv1d
-        out = self.tcn(x_in)        # (B, C_last, L), apply stacked temporal blocks
-        out = out.permute(0, 2, 1)  # (B, L, C_last)
+        out = self.tcn(x_in)        # (B, C_last, L), apply stacked temporal blocks (Each block applies two causal convolutions + residual connection. Dilation increases the temporal receptive field exponentially)
+        out = out.permute(0, 2, 1)  # (B, L, C_last), permute back to (B, L, C_last), easier to apply masked pooling along the time dimension.
 
-        # Pool across time
+        # Masked pooling across time
+        # Converts sequence of features into a single patient-level feature vector.
         if mask is None:
             pooled = out.mean(dim=1)
         else:
             pooled = self.masked_mean_pool(out, mask)
 
-        # Dense head
+        # Optional dense head
         if self.head is not None:
-            pooled = self.head(pooled)
+            pooled = self.head(pooled)          # Combines pooled features before feeding into task-specific outputs
 
-        # Task outputs
-        logit = self.classifier(pooled)         # (B, 1)
-        regression = self.regressor(pooled)     # (B, 1)
+        # Task heads outputs
+        # .squeeze(-1) removes a dimension of size 1, makes the tensor easier to work with (loss functions expect (B,) not (B,1)).
+        logit_max = self.classifier_max(pooled).squeeze(-1)   # (B,)
+        logit_median = self.classifier_median(pooled).squeeze(-1)  # (B,)
+        regression = self.regressor(pooled).squeeze(-1)
 
+        # dictionary with classification logit (raw score) and regression value for each patient
+        # now ready for the loss functions
         return {
-            "logit": logit.squeeze(-1),             # (B,)
-            "regression": regression.squeeze(-1)    # (B,)
+            "logit_max": logit_max,
+            "logit_median": logit_median,
+            "regression": regression,
         }
 
 # -------------------------------------------------------------
 # Step 6: Quick unit test / smoke test
 # -------------------------------------------------------------
-if __name__ == "__main__":
+if __name__ == "__main__": 
     # small smoke test
     B = 4
     L = 96
@@ -288,10 +313,12 @@ if __name__ == "__main__":
         mask[i, :ln] = 1.0
 
     out = model(x, mask)
-    print("logit.shape:", out["logit"].shape)        # expected (B,)
-    print("regression.shape:", out["regression"].shape)  # expected (B,)
+    print("logit_max.shape:", out["logit_max"].shape)        # expected (B,)
+    print("logit_median.shape:", out["logit_median"].shape)  # expected (B,)
+    print("regression.shape:", out["regression"].shape)      # expected (B,)
 
     # Check numeric values
-    assert out["logit"].shape == (B,)
+    assert out["logit_max"].shape == (B,)
+    assert out["logit_median"].shape == (B,)
     assert out["regression"].shape == (B,)
     print("TCN smoke test passed.")
