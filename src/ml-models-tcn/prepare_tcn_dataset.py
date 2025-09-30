@@ -17,6 +17,7 @@ Outputs:
 - Deployment objects for reproducibility (deployment_models/preprocessing/):
     - standard_scaler.pkl → trained z-score normalisation scaler
     - padding_config.json → JSON file with max_seq_len + feature ordering
+    - patient_splits.json → JSON file with patient IDs in each split (train/val/test) for reproducibility
 """
 
 #-------------------------------------------------------------
@@ -75,7 +76,7 @@ df = df.merge(patient_features_df, on="subject_id", how="left")
 # Convert targets to binary for stratification
 #-------------------------------------------------------------
 df["max_risk_binary"] = df["max_risk"].apply(lambda x: 1 if x > 2 else 0) # collapse [0,1,2]=0; [3]=1 (0=not-high, 1=high).
-df["median_risk_binary"] = df["median_risk"].apply(lambda x: 0 if x == 1 else 1) # collapse [0,1]=0; [2]=1 (0=low, 1=medium).
+df["median_risk_binary"] = df["median_risk"].apply(lambda x: 1 if x == 2 else 0) # collapse [0,1]=0; [2]=1 (0=low, 1=medium).
 
 #-------------------------------------------------------------
 # Step 1: Patient-level stratification
@@ -120,6 +121,18 @@ print("[INFO] Split sizes:", {k: len(v) for k, v in splits.items()})
 print("[INFO] Stratification preserved binary balance across splits.")
 
 #-------------------------------------------------------------
+# Step 1b: Save patient splits for reproducibility
+#-------------------------------------------------------------
+SPLITS_PATH = SCALER_DIR / "patient_splits.json"
+with open(SPLITS_PATH, "w") as f:
+    json.dump(
+        {k: v.tolist() for k, v in splits.items()},  # convert NumPy arrays to lists
+        f,
+        indent=2
+    )
+print(f"[INFO] Saved patient splits to {SPLITS_PATH}")
+
+#-------------------------------------------------------------
 # Step 2: Feature/target separation
 #-------------------------------------------------------------
 # Decide which columns will be inputs into the model and which are not, then we group the dataframe rows by patient into sequences.
@@ -145,10 +158,15 @@ feature_cols = [c for c in candidate_cols if c not in drop_cols]
 binary_cols = [c for c in feature_cols if set(df[c].dropna().unique()).issubset({0, 1})]
 continuous_cols = [c for c in feature_cols if c not in binary_cols]
 
+# Clean NaNs and Infs in feature columns
+df[feature_cols] = df[feature_cols].fillna(0.0)
+df[feature_cols] = df[feature_cols].replace([np.inf, -np.inf], 0.0)
+
 print(f"[INFO] Selected {len(feature_cols)} features")
 print(f"[INFO] - {len(continuous_cols)} continuous")
 print(f"[INFO] - {len(binary_cols)} binary")
 print(f"[INFO] Dropped categorical cols: {drop_cols}")
+print(f"[INFO] Cleaned feature columns: replaced NaN/Inf with 0.0")
 
 #-------------------------------------------------------------
 # Step 3: Normalisation (z-score on continuous only)

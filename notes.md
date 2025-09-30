@@ -1835,17 +1835,29 @@ src/
     - Saving scaler + config JSON for reproducibility.
   - **Reasoning**: handling realistic, messy temporal data is my clinical-technologist edge.
 2. **Model Architecture (TCN)**
-	- **Base**: Temporal Convolutional Network (causal dilated 1D convolutions).
-	- **Design**:
-    -	**Input**: batch, sequence_length, features.
-    -	3–4 residual blocks with dilated convolutions.
-    -	Dropout + layer normalisation.
-    -	Global pooling (collapse sequence into fixed vector).
-    -	Dense output layer (sigmoid for binary, linear for regression).
-	-	**Targets**:
-    -	Binary classification → max_risk, median_risk.
-    -	Regression → pct_time_high.
-  - **Reasoning**: TCN is unique, less “cookie-cutter” than LSTM/GRU/Transformer, but still respected. Shows why we picked it (causal, efficient, long receptive field).
+  - **Base**: Temporal Convolutional Network (stacked causal dilated 1D convolutions).  
+  - **Design**:
+    - **Input**: `(batch, sequence_length, features)` → permuted to `(batch, channels, sequence_length)` for Conv1d.  
+    - **Residual blocks**: 3 TemporalBlocks, each with:  
+      - 2 causal convolutions (dilated, length-preserving).  
+      - LayerNorm → stabilises training.  
+      - ReLU activation → non-linearity.  
+      - Dropout → regularisation.  
+      - Residual/skip connection → stable gradient flow.  
+    - **Stacking with dilation**: each block doubles dilation (1, 2, 4) → exponentially increasing receptive field.  
+    - **Masked mean pooling**: collapses variable-length sequences into a single patient-level vector, ignoring padding.  
+    - **Optional dense head**: Linear → ReLU → Dropout → mixes pooled features before output.  
+    - **Task-specific heads**:  
+      - Classification: `classifier_max`, `classifier_median` (binary logits).  
+      - Regression: `regressor` (continuous `pct_time_high`).  
+  - **Targets**:  
+    - Binary classification → `max_risk`, `median_risk`.  
+    - Regression → `pct_time_high`.  
+  - **Reasoning**:  
+    - TCNs are causal by design → no future leakage.  
+    - Dilated convolutions give long temporal memory without very deep stacks.  
+    - Residual connections + LayerNorm = stable training, even with many blocks.  
+    - Chosen as a modern, efficient alternative to RNNs (LSTM/GRU) and Transformers, showing a deliberate design choice.  
 3. **Model Training**
 	- **Loss functions**: Binary cross-entropy (classification), MSE (regression).
 	-	**Class imbalance**: Use pos_weight in BCE loss.
@@ -1955,6 +1967,7 @@ src/
 	-	**Split patients**:
     - **First split**: 70% → train, 30% → temp pool.
     - **Second split**: temp pool split evenly → 15% val, 15% test.
+  - Save patient splits for reproducibility `deployment_models/preprocessing/patient_splits.json`
   - **Rationale**:
     - Splitting by patient and not rows prevents data leakage (same patient cannot appear in multiple splits).
     - Stratification balances rare high-risk cases (prevent class imbalance). Optional if your classes are well-distributed, but for small datasets, stratification is safer to avoid one set being unrepresentative.
@@ -2056,13 +2069,13 @@ Preprocessing: prepare_tcn_dataset.py
 Save Tensors + Masks (prepared_datasets/)          Save Padding & Feature Configuration (deployment_models/preprocessing/)
 - train.pt (tensor: sequences for training)        - standard_scaler.pkl (mean/std from training set)
 - val.pt (tensor: sequences for validation)        - padding_config.json (max_seq_len, padding rules)
-- test.pt (tensor: sequences for testing)               │ 
-- corresponding masks.pt                                ▼                
-        │                                          Used only at inference:
-        ▼                                          - Apply same scaling to new patient sequences
-Used only during training for:                     - Apply same padding/truncation rules
-- Model fitting                                    - Ensure input format matches trained TCN
-- Validation
+- test.pt (tensor: sequences for testing)          - patient_splits.json (dictionary of patient train/val/test split)
+- corresponding masks.pt                                │                
+        │                                               ▼
+        ▼                                          Used only at inference:
+Used only during training for:                     - Apply same scaling to new patient sequences
+- Model fitting                                    - Apply same padding/truncation rules
+- Validation.                                      - Ensure input format matches trained TCN
 - Testing
 ```
 
@@ -2090,7 +2103,8 @@ src/ml-models-tcn/prepared_datasets/
         ▼
 src/ml-models-tcn/deployment_models/preprocessing/
 ├── standard_scaler.pkl      # Z-score scaler (continuous features)
-└── padding_config.json      # Max sequence length, padding value, feature order
+├── padding_config.json      # Max sequence length, padding value, feature order
+└── patient_splits.json      # dictionary of patient train/val/test split
 ```
 
 ### Folder Structure for Outputs
@@ -2107,16 +2121,16 @@ src/ml-models-tcn/
 ├── deployment_models/                     # Preprocessing artifacts needed to run inference on new data
 │   ├── preprocessing/                     # Objects to reproduce the same preprocessing at inference
 │   │   ├── standard_scaler.pkl            # Z-score scaler fitted on training data (mean/std per feature)
-│   │   └── padding_config.json            # Metadata about max sequence length, padding scheme, feature order
-
+│   │   ├── padding_config.json            # Metadata about max sequence length, padding scheme, feature order
+│   │   └── patient_splits.json            # Dictionary of patient train/val/test split
 Notes:
 - All .pt files in prepared_datasets/ are tensors directly used in TCN training.
 - The mask tensors are necessary for handling padded sequences during loss computation.
-- scalers and padding_config go into deployment_models/ because they are part of the pipeline that prepares new, unseen data in exactly the same way as training. They are not training artifacts.
+- scalers, padding_config and training split go into deployment_models/ because they are part of the pipeline that prepares new, unseen data in exactly the same way as training. They are not training artifacts.
 - This separation avoids confusion: training tensors vs preprocessing/deployment metadata.
 - Summary:
 	-	Training tensors + masks → prepared_datasets/
-	- Scalers + padding configs → deployment_models/scalers/
+	- Scalers + padding configs + patient split → deployment_models/scalers/
 ```
 
 ### Step 1 Output Artifacts
@@ -2131,9 +2145,9 @@ Notes:
 | Test mask              | `test_mask.pt`          | `prepared_datasets/`          | `(num_test_patients, max_seq_len)`                | Mask padded timesteps                                |
 | Scaler object          | `standard_scaler.pkl`   | `deployment_models/preprocessing/`  | sklearn StandardScaler object                   | Z-score scaling params (fit on training set only)    |
 | Padding configuration  | `padding_config.json`   | `deployment_models/preprocessing/`  | JSON dict (max_seq_len, feature ordering, etc.) | Reproducibility of preprocessing pipeline            |
-
+| Patient splits         | `ppatient_splits.json`  | `deployment_models/preprocessing/`  | JSON dict (train/validate/test) | Reproducibility of preprocessing pipeline            |
 **Important**: All sequence tensors + masks are in prepared_datasets/.
-Scalars/configs are in deployment_models/scalers/ because they are needed for inference/deployment, not training data itself.
+Scalars/configs/splits are in deployment_models/scalers/ because they are needed for inference/deployment, not training data itself.
 
 
 ### Why Patient-Level Outcomes for Current TCN
@@ -2207,54 +2221,804 @@ df[binary_cols] = df[binary_cols].astype(np.float32)
 
 ---
 
-## Day 17 Notes - Continue Phase 4: Model Architecture (Step 2)
+## Day 17-18 Notes - Continue Phase 4: Model Architecture (Step 2)
+
+### Goals
+- **TCN model architecture** (`tcn_model.py`) with:
+  - CausalConv1d implementation (padding + trimming).
+  - TemporalResidualBlock with residual connections, LayerNorm, ReLU, Dropout.
+  - Stacked TCN with exponentially increasing dilations.
+  - Masked mean pooling to handle variable-length sequences.
+  - Optional dense head (linear → ReLU → dropout).
+  - Task-specific heads for classification (max_risk, median_risk) and regression (pct_time_high).
+- Add a **smoke test** to confirm:
+  - Model runs end-to-end on dummy data.
+  - Shapes of outputs match expectations `(B,)`.
+- Clarify **conceptual understanding**:
+  - Input/output tensor shapes and why permutation is needed.
+  - Role of residuals, dense head, and pooling.
+  - Why multiple task-specific heads are defined.
+- Document **key concepts and reasoning** for:
+  - Why causal convolutions (avoid future leakage).
+  - Why residuals (gradient flow, stable training).
+  - Why masked pooling (ignore padding).
+  - Why multiple task heads (support classification + regression).
 
 ### What We Did
-**Step 2: Model Architecture (TCN)**
-1. Define Input/Output Shapes
-	•	Input tensor: (batch_size, seq_len, num_features)
-	•	Already prepared in Step 1 (padded sequences + masks).
-	•	Output tensor:
-	•	Binary classification → (batch_size, 1) probability of escalation (sigmoid).
-	•	Regression → (batch_size, 1) continuous output for pct_time_high.
+**Built full TCN model pipeline (`tcn_model.py`) and ran a smoke test to confirm it works end-to-end**
+#### Overall Flow of the Script
+1. **Causal Convolution (CausalConv1d)**
+   - Standard convs look both left and right in time → would leak future info.  
+   - Causal conv pads only the left and trims the right → each output depends only on present + past timesteps.  
+   - Preserves temporal causality, critical for ICU forecasting.
+2. **Temporal Residual Block**
+   - Core “unit” of the TCN. Each block =  
+     - 2 causal convs (extract local temporal features).  
+     - LayerNorm (stabilises activations → prevents exploding/vanishing gradients).  
+     - ReLU activation (adds non-linearity → lets the model learn complex patterns).  
+     - Dropout (regularisation → avoids overfitting by randomly zeroing some activations).  
+     - Residual connection (adds input back to output → ensures gradient flow in deep stacks).  
+   - Downsample via 1×1 conv if channel dimensions don’t match.
+3. **Stacked TCN (TCNModel)**
+   - Multiple TemporalBlocks stacked together.  
+   - **Dilations double each block (1, 2, 4, …)** → exponentially expand receptive field, so deeper layers see longer history without huge kernels.  
+   - Output feature dimension = channels from the last block.
+4. **Masked Mean Pooling**
+   - Patients have variable sequence lengths → padding is used.  
+   - Masked pooling ensures **only real timesteps contribute** when reducing sequence to patient-level vector.  
+   - Computes:  
+     - `sums = features * mask` (ignores padding).  
+     - `mean = sums / counts` (divides by actual number of valid timesteps).  
+   - Result = one fixed-size feature vector per patient.
+5. **Dense Head (Optional)**
+   - A small fully connected layer applied before final task heads.  
+   - Linear → ReLU → Dropout.  
+   - Purpose: mixes pooled features and adds extra flexibility.  
+   - Optional because sometimes you want direct features → heads, sometimes richer mixing.
+6. **Task-Specific Heads**
+   - Separate linear layers for each prediction:  
+     - `classifier_max` → binary classification (max risk).  
+     - `classifier_median` → binary classification (median risk).  
+     - `regressor` → continuous regression (pct_time_high).  
+   - Each outputs shape `(B,)` after `.squeeze(-1)`.  
+   - These outputs go into **loss functions** during training:  
+     - BCEWithLogitsLoss (classification).  
+     - MSELoss (regression).
+7. **Smoke Test**
+   - Built-in quick run (`if __name__ == "__main__":`).  
+   - Created dummy data (B=4, L=96, F=173) with masks of different sequence lengths.  
+   - Ran forward pass through full model.  
+   - Verified output shapes:
+     - `logit_max`: (4,)  
+     - `logit_median`: (4,)  
+     - `regression`: (4,)  
+   - Assertions passed → confirms end-to-end pipeline works.
+#### Reasoning
+- **Causality**: ensures no leakage from future → realistic for ICU time series.  
+- **Residuals + LayerNorm**: stabilise very deep models → gradients don’t vanish/explode.  
+- **Dropout**: improves generalisation, avoids memorisation of noise.  
+- **Dilations**: allow long temporal context without huge kernels.  
+- **Masked pooling**: makes variable-length patient sequences comparable.  
+- **Dense head**: optional mixing step before predictions.  
+- **Separate heads**: support multiple tasks (binary + continuous).  
+- **Smoke test**: sanity check → prevents silent shape mismatches.
+#### Reflection
+- Today’s focus was on **understanding flow** from input → temporal feature extraction → pooling → patient-level predictions.  
+- Key learning: out_channels (kernels) ≠ input features; each kernel learns different temporal patterns.  
+- Masked pooling was important to handle **variable sequence lengths**.  
+- The smoke test confirmed the **pipeline is implemented correctly** and outputs are as expected.  
+
+### Causal Convolutional Layers in TCNs
+
+#### Convolution
+- A **convolution** applies a sliding window (kernel/filter) across the input sequence to detect local patterns.
+- For **1D time-series**:
+  - At each timestep, the model looks at a fixed-size window of past values (e.g., last 3 HR readings) and computes a weighted sum.
+  - This weighted sum captures how much the current window matches a learned temporal pattern (e.g., “steady rise” or “sudden drop”).
+- Formula (simplified):
+
+output[t] = sum(inputs[t-window_size+1:t] * weights)
+
+#### Kernel / Filter
+- A **kernel** is a set of learnable weights applied to a local temporal window.
+- **Shape**: `(in_channels, kernel_size)`  
+- `in_channels` = number of input features (vitals/labs, e.g., 173).  
+- `kernel_size` = number of consecutive timesteps considered.
+- Each kernel produces **1 output time-series**, combining information across all input features in that window.
+- Example:
+  - Input: 173 features × 96 timesteps
+  - Kernel size 3 → looks at t, t-1, t-2 across all features
+  - Output: 1 new feature per kernel (length 96)
+
+#### Weight
+- Each element in the kernel is a **weight**, a learnable number that controls how much influence each input value has.
+- During training, **backpropagation** updates these weights so the kernel learns to detect useful patterns.
+- Example:
+
+Inputs: 3 features (HR, BP, SpO2), 3 timesteps (t, t-1, t-2)
+input_patch = [
+    [HR[t], HR[t-1], HR[t-2]],
+    [BP[t], BP[t-1], BP[t-2]],
+    [SpO2[t], SpO2[t-1], SpO2[t-2]]
+]
+Kernel weights (same shape as input_patch)
+weights = [
+    [0.5, 0.3, 0.1],     # HR
+    [-0.2, 0.05, -0.1],  # BP
+    [0.1, -0.05, 0.02]   # SpO₂
+]
+Output at timestep t
+output[t] = sum(input_patch[i][j] * weights[i][j] for i in range(3) for j in range(3))
+1. Multiply each weight by its corresponding input value.
+2. Add up all the results.
+3. That gives one output number for this timestep and this kernel.
+
+#### Padding and Trimming
+- **Padding**: add artificial values (usually zeros) at the start of the sequence so convolutions can compute outputs for the first timesteps.
+- **Causal padding**: pad only the past (left side) to avoid future information leakage.
+- **Trimming**: remove extra outputs caused by padding at the far end so output length matches input length.
+- **Combined**: ensures same output length as input but enforces causality.
+	1. **Alignment**: output length = input length, so each timestep maps cleanly through the network, easier to stack multiple layers.
+	2. **Causality**: by padding only on the left, we make sure each timestep only sees its past, not its future.
+
+#### Causal Convolution
+- **Causal** = outputs at time `t` depend **only** on `t` and earlier.
+- Ensures realistic forecasting: the model never “peeks into the future.”
+- Achieved via **left padding + trimming**.
+
+#### Dilated Convolution
+- Introduces **gaps** between kernel elements (spacing between sampled timesteps).
+- Example:
+  - Kernel size 3, dilation 2 → looks at `[t, t-2, t-4]`
+  - Expands the **temporal receptive field** without increasing kernel size.
+  - Allows the network to capture **long-term dependencies** efficiently.
+
+#### Receptive Field
+- The **receptive field** = the total number of original timesteps that can influence a particular output.
+- With **stacked and dilated layers**, the receptive field grows exponentially:
+  - Layer 1 (kernel 3, d=1) → 3 timesteps
+  - Layer 2 (kernel 3, d=2) → 7 timesteps
+  - Layer 3 (kernel 3, d=4) → 15 timesteps
+- Deeper layers integrate information from multiple previous outputs, which themselves summarize prior timesteps.
+
+#### Out Channels / Multiple Kernels
+- `out_channels` = number of kernels per convolution layer.
+- Different kernels are initialized differently and trained independently, so detects a **different temporal pattern** across all input features. For example:
+	-	Kernel A might assign high weights to HR at t-2, t-1, t → detects sharp HR rise.
+	-	Kernel B might assign high weights to BP at t-2, t-1, t → detects BP drop.
+	-	Kernel C might combine HR ↑ and SpO₂ ↓ → detects correlated patterns.
+-	The network learns these weights during training via backpropagation, so each kernel “specializes” in detecting a particular temporal pattern.
+- The outputs of all kernels are stacked → new feature map `(out_channels, L)`
+- If you have 64 out_channels, you get 64 feature maps, each representing the activation of one kernel across the sequence.
+- These are the new “channels” that carry transformed, more abstract information about temporal patterns.
+- This is why the number of channels often **changes after the first layer**: the network is creating new abstract features.
+
+#### Temporal Residual Block
+- **Two causal convolutions per block**:
+  - Helps the network detect more complex temporal patterns.
+  - Prevents vanishing gradients via **residual (skip) connections**.
+- **LayerNorm**: normalizes across channels to stabilize training.
+- **Dropout**: randomly zeroes activations during training to reduce overfitting.
+- **ReLU**: introduces non-linearity so the network can learn complex relationships.
+
+#### Summary / Why We Use This
+- **Causal convolutions** = realistic ICU predictions (no future leakage).
+- **Dilated + stacked layers** = large temporal receptive field using few parameters, letting the model pick up both:  
+  - **Short-term spikes** (e.g., sudden drop in SpO₂) from first layers of kernels which are sensitive to sudden spikes/drops.
+  - **Long-term patterns** (e.g., gradual blood pressure decline) from deeper layers covering more timestamps.  
+- **Multiple kernels/out_channels** = detect diverse patterns across all features.
+- **Residual blocks + normalization + dropout** = stable, generalizable training.
+- **Masked pooling later** = aggregates per-patient sequence into single vector for patient-level prediction.
+
+Together, this lets the TCN learn both **short-term spikes** and **long-term trends** from the full time series of vitals/labs, producing robust patient-level outcome predictions.
 
 
-2. TCN Core Blocks
-	•	Causal dilated 1D convolutions: ensure predictions only depend on past data.
-	•	Residual connections: stabilise training and prevent vanishing gradients.
-	•	Stacked layers: 3–4 blocks with increasing dilation rates (1, 2, 4, 8).
-	•	Dropout + layer norm: regularisation and stabilisation.
+### Temporal Residual Block (TemporalBlock)
+#### Purpose
+- Just one convolution layer is not enough. Real data is noisy, and patterns can be complex. So we stack two convolutions in a block. This is called a Temporal Residual Block.
+- First convolution finds simple local patterns, second convolution can combine them into slightly more complex patterns.
+- Captures both **short-term spikes** and **long-term trends** across multiple layers.
+
+#### Foundational Key Concepts
+- **Gradient = the slope of the loss function with respect to a weight**
+	- Loss = computed by a loss function (MSE, MCE) on the model output, tells us how wrong the model’s prediction was compared to the true value.
+  - A gradient tells the direction and magnitude by which each parameter should change to reduce the loss.
+	-	Positive slope → increasing weight increases loss (bad), so we should decrease it.
+	-	Negative slope → increasing weight decreases loss (good), so we should increase it.
+-	**Backpropagation:**
+	-	We first do a forward pass (compute outputs using current weights).
+	-	Then compute the loss (difference from true labels).
+	-	Then we push gradients backwards through the layers (chain rule of calculus), it calculates how those weights should change, based on how wrong the final prediction was.
+	-	This tells earlier layers how to adjust their weights so that next time they produce better inputs for later layers.
+  - This cycle is repeated many times across the dataset. The network is “happy” when the loss (prediction error) stops improving much.
+- Why adjust early layers? Because early weights create the representations that later layers depend on. If early weights never change, the network can’t learn meaningful low-level features (like detecting spikes or correlations in vitals).
+- **Vanishing / exploding gradients**
+  - The gradient is a product of derivatives of each layer.
+	- If weights are small (<1), multiplying many of them → product shrinks towards zero → gradients vanish. 
+  - If gradients shrink too much as they flow backwards, early layers barely update → network stops learning. This is the vanishing gradient problem.
+  - If weights are large (>1), multiplying many → product blows up → gradients explode.
+	-	If gradients blow up (become huge), weights swing wildly → unstable training. This is the exploding gradient problem.
+	-	Both are common in deep stacks of layers.
+  - Residuals and normalisation help stop that from happening.
+
+#### Components per layer
+1. **Causal Convolutions**
+- Only look at **current and past timesteps**, not the future → prevents information leakage for realistic ICU forecasting.
+- **Kernel**: a small window of weights applied across a few timesteps. Each weight multiplies the input value at that timestep; outputs are summed to produce a single number per kernel.
+- **Dilated kernel**: skips timesteps to expand the temporal coverage without increasing kernel size.
+- **Multiple kernels per layer** → called **out_channels**; each layer has multiple kernels (filters), each learning to detect different temporal patterns (e.g., HR spike, BP drop, combined trends).
+- **Stacking two causal convolutions** → allows the block to learn more complex patterns than a single convolution layer could capture alone.
+
+2. **Layer Normalisation (LayerNorm)**
+- nn.LayerNorm in PyTorch expects the last dimension to be the one(s) you want to normalise over. So need to convert to (B, L, C), so that C (channels) is last → LayerNorm will compute mean/variance across those channels.
+- Normalises **values across channels at each timestep**: mean ≈ 0, variance ≈ 1.
+- If a timestep has 64 channel outputs, find the mean and variance across these 64 values, rescale values so the new set has mean ≈ 0 and variance ≈ 1 (normalising the channel values at that timestep).
+- Stabilises training because:
+  - Prevents some features from dominating due to large scale (no inconsistent scales).
+  - Helps gradients remain balanced.
+- Intuition: ensures the activations fed into the next layer have **consistent scale**, reducing the chance of exploding or vanishing gradients.
+
+3. **Activation (ReLU)**
+- **Purpose**: introduces non-linearity into the network.
+- **Linear combinations** alone cannot capture complex relationships; activations allow the network to model non-linear interactions.
+- **ReLU (Rectified Linear Unit)**: `ReLU(x) = max(0, x)`  
+  - Converts negative outputs to 0, leaves positive outputs unchanged (keeps positive signals, removes negative signals).
+  - Efficient, avoids vanishing gradients for positive activations.
+- **Vanishing gradient problem**: in deep networks, gradients shrink as they backpropagate → very small updates, network stops learning. ReLU helps mitigate this for positive signals.
+
+4. **Dropout (during training only)**
+- Randomly zeros some outputs during training with a probability `p` (e.g., 0.2).
+- **Purpose**:
+  - Prevents **overfitting**: the model cannot rely on specific neurons/features all the time.
+  - Encourages **robust representations**: remaining neurons must learn distributed patterns independently.
+- During inference (using the model on new patients), dropout is disabled; all neurons are used.
+	-	Dropout is on during training (to regularise).
+	-	Dropout is off during inference (you want stable predictions).
 
 
-3. Sequence-to-Patient Collapse
-	•	Global average pooling over time dimension → (batch_size, feature_dim).
-	•	Alternative: global max pooling (test both in ablation).
-	•	Purpose: summarises entire patient trajectory into one vector for classification/regression.
+#### After both layers computed
+5. **Downsample / Projection (1×1 Convolution) - if needed**
+- Used when **input channels ≠ output channels** (e.g., first layer has 173 features, block outputs 64 channels).
+- 1×1 convolution adjusts dimensions to match, so residual addition is valid.
+- **Why 1×1**:
+  - Doesn’t combine temporal info; only maps input feature space → output feature space.
+  - Ensures every output channel has a corresponding residual input channel to add.
+
+6. **Residual Connection**
+- **Residual connection** = original input sequence added back to the output of convolutions after the temporal block finishes `output = block(input) + input`.
+- **Why**:
+  - Allow gradients to flow through deep networks → prevent vanishing gradients → stable training.
+  - This “shortcut path” means the gradient can flow directly from later layers to earlier ones, bypassing the convolutions.
+  - Preserves **gradient flow** more easily backward through the network, avoids vanishing gradients in deep networks.
+  - Lets the block **learn residual corrections** instead of full transformations: layer only needs to learn small adjustments (“corrections”) to the input, not rebuild the entire signal.
+  - Makes learning more efficient, reduces risk of training instability in deep stacks, train effectively without the first layers’ gradients vanishing.
+- Without residuals, deep TCNs can fail to learn if gradient shrinks exponentially (vanishing gradient), the first layers hardly get updated, and learning stalls.
+
+#### Chronological flow
+**Forward Pass**
+1. Input tensor `(batch, channels, seq_len)` → **BCL format**.
+2. Layer 1 (Conv1 → LayerNorm → ReLU → Dropout): 
+  - **Causal conv**: extract first layer of temporal patterns.
+  - **LayerNorm**: normalise across channels at each timestep (convert to BLC format just for this step).
+  - **ReLU activation**: add non-linearity.
+  - **Dropout (during training only)**: randomly zero some outputs.
+3. Layer 2 (Conv2 → LayerNorm → ReLU → Dropout): combine previous patterns into more complex ones.
+4. **Downsample (1×1 conv)**: reshapes channels for residual addition.
+5. **Residual addition**: adds original input (or downsampled input) to output. Give gradients a shortcut path back.
+6. Output tensor `(batch, out_channels, seq_len)` → ready for next block or pooling or final classifier.
+**Backward pass (not in this script)** 
+1. Compute loss at the very end (prediction vs label).
+2. Backprop starts: compute gradients of loss wrt outputs.
+3. Gradients flow backward through residual add, then through conv2, conv1, etc.
+4. Optimiser updates the weights (kernels, 1×1 conv, etc.) a little bit.
+**Then you repeat this whole forward+backward cycle many times over the dataset.**
+Forward pass → Loss → Backward pass (gradients) → Weight update (repeat many epochs until convergence)
+**Intuition**:
+- Each block learns a set of temporal detectors.
+- Stacking multiple blocks increases the **effective receptive field**, combining short-term and long-term patterns.
+- Works with **causal convolutions** to ensure predictions never “peek into the future”.
+
+#### Why it matters for our TCN
+- Builds **robust temporal features** from sequential ICU data.
+- Prepares sequences for **masked pooling** and downstream **patient-level predictions** (classification/regression).
+- Together with **causal convolutions**, ensures model captures **short-term spikes** and **long-term trends** across multiple vitals, improving predictive performance over classical models like LightGBM.
 
 
-4. Output Layers
-	•	Dense → Sigmoid for classification (max_risk, median_risk).
-	•	Dense → Linear for regression (pct_time_high).
+
+### TCN Model with Masked Pooling
+#### Overview
+- This step defines the full **Temporal Convolutional Network (TCN) model** that takes variable-length ICU time series data and produces **patient-level predictions**.  
+- It stacks **TemporalBlocks** (causal convolutions + residual connections) to extract temporal patterns, then converts the sequence into a fixed-size vector using **masked mean pooling**.  
+- Finally, the pooled vector is passed through optional **dense head(s)** and **task-specific heads** for classification and regression.
+
+#### Key Concepts
+1. **Temporal Blocks (Feature Extractors)**
+- Each block = 2 causal convolutions + residual connection.
+- **Dilation doubles** each block (1, 2, 4, …), exponentially increasing the **receptive field** (how far back in time the model can "see").
+- Purpose: capture both short- and long-term dependencies in ICU sequences.
+
+2. **Stacking Temporal Blocks**
+- Blocks are stacked in `nn.Sequential`:
+  - Output of one → input of the next.
+- Final output shape after the TCN stack: `(B, C_last, L)`  
+  - `B`: batch size (patients)  
+  - `C_last`: number of channels (features learned by last block)  
+  - `L`: sequence length  
+
+3. **Masked Mean Pooling**
+- ICU sequences vary in length → we pad them for batching.
+- **Problem**: padding timesteps are not real, should not influence averages.
+- **Solution**:  
+  - Multiply by `mask` → zero out padding.  
+  - Sum only valid timesteps.  
+  - Divide by number of valid timesteps.  
+- Result: a **single vector per patient** `(B, C_last)` summarising the whole sequence.
+
+4. **Optional Dense Head**
+- Purpose: add an extra small fully-connected layer before the outputs.
+- Structure:  
+  - Linear → ReLU → Dropout.  
+- Role:  
+  - Mixes learned features across channels.  
+  - Adds extra non-linearity.  
+  - Provides regularisation (dropout).
+- Optional because sometimes you want this richer representation, sometimes you prefer direct pooled features.
+- Controlled by `head_hidden`:  
+  - If set (e.g. `64`) → dense head is used.  
+  - If `None` → skip dense head, use pooled features directly.
+
+5. **Task-Specific Heads**
+- Separate linear layers for each prediction task.  
+- Each head outputs **one number per patient**:
+  - `classifier_max`: logit for maximum-risk classification.  
+  - `classifier_median`: logit for median-risk classification.  
+  - `regressor`: continuous regression (e.g. fraction of time high-risk).  
+
+6. **Logits and Squeezing**
+- **Logit** = raw score from classifier before sigmoid.  
+  - Used with `BCEWithLogitsLoss` for numerical stability.  
+- After linear layer, shape = `(B, 1)`.  
+- `.squeeze(-1)` → `(B,)`, removes the trailing dimension of size 1.  
+  - Needed because loss functions expect `(B,)` not `(B,1)`.
+
+**Flow of Data**
+1. Input: `(B, L, F)` (batch, sequence length, features per timestep).  
+2. Permute → `(B, F, L)` for Conv1d.  
+3. Pass through stacked TemporalBlocks → `(B, C_last, L)`.  
+4. Permute back → `(B, L, C_last)`.  
+5. Apply **masked mean pooling** → `(B, C_last)`.  
+6. Optional dense head (if enabled) → `(B, head_hidden)`.  
+7. Pass to **task-specific heads**:  
+   - `classifier_max`: `(B,)`  
+   - `classifier_median`: `(B,)`  
+   - `regressor`: `(B,)`.  
+8. Return dictionary of predictions (ready for loss functions).
+
+#### Reasoning
+- **Temporal blocks**: capture multi-scale temporal dependencies.  
+- **Masked pooling**: ensures variable-length sequences map to fixed-size patient representations.  
+- **Dense head**: optional flexibility to enrich representations.  
+- **Task-specific heads**: handle multi-task learning cleanly.  
+- **Squeeze**: makes outputs compatible with PyTorch loss functions.  
 
 
-5. Masking Strategy
-	•	You already created mask tensors during Step 1.
-	•	Apply mask before pooling so padded timesteps don’t contaminate patient representation.
+### Causal Convolution: Padding + Trimming Diagram
+**Suppose we have**:
+- Input sequence: `[x0, x1, x2, x3]`
+- Kernel size = 3
+- Dilation = 1
+**Step 1: Add left padding**
+- We pad at the **start** so the convolution can compute the first timestep:
+[0, 0, x0, x1, x2, x3]
+ ^   ^      ^
+pad pad    input sequence
+
+- `0` values are fake “past” inputs.
+- Allows the kernel to slide over the first timestep.
+
+**Step 2: Apply 1D convolution**
+Kernel slides across the sequence:
+timestep 0: [0, 0, x0] → output0
+timestep 1: [0, x0, x1] → output1
+timestep 2: [x0, x1, x2] → output2
+timestep 3: [x1, x2, x3] → output3
+
+- **Each output only sees past + present**, never future.
+
+**Step 3: PyTorch padding adds extra on right**
+- PyTorch’s `padding` parameter pads both sides. To ensure **causality**, we trim the extra right padding:
+- After convolution (with symmetric padding):
+[output0, output1, output2, output3, extra0, extra1]
+
+- Trim extra right padding → keep first 4 outputs
+
+**Step 4: Result**
+- Output length = input length
+- Each timestep’s output depends only on its past and present
+- No future leakage occurs
 
 
-6. Training Considerations
-	•	Losses:
-	•	Binary cross-entropy (classification).
-	•	MSE (regression).
-	•	Imbalance: use pos_weight in BCE for skewed max_risk.
-	•	Optimiser: Adam + learning rate scheduler.
-	•	Regularisation: Dropout (0.2–0.3) + early stopping.
+### Reflection
+#### Challenges
+- Struggled with **abstract mathematical concepts** behind convolutions, residuals, and backpropagation.  
+- Went too deep into low-level implementation details (gradients, matrix multiplications), which slowed progress and risked burning out.  
+- Difficulty understanding why **out_channels ≠ input features** (173 → 64) and how multiple kernels combine.  
+- Confusion about **causal convolution padding**:
+  - Why we add left padding.
+  - Why PyTorch pads both sides.
+  - Why trimming is required to keep outputs aligned.  
+- Input shape mismatches caused a lot of confusion: why we need to permute `(B, L, F)` → `(B, F, L)` before Conv1d.  
+#### Solutions & Learnings
+- **Causal convolution clarified**:
+  - Left padding ensures first timestep has enough context.
+  - Each kernel sees only the **past and present**, not the future.
+  - PyTorch pads both sides → extra outputs trimmed to restore correct length.  
+- **Input shape reasoning**:
+  - `(B, L, F)` = patients × timesteps × features (natural format).  
+  - Conv1d expects `(B, C, L)` because channels = features (like RGB in images).  
+  - After first conv: in_channels = features; after that: in_channels = out_channels of previous layer (learned patterns).  
+- **Kernel structure**:
+  - Conv1d(in_ch=173, out_ch=64, kernel=3) → 64 kernels, each shaped `(173, 3)`.  
+  - Each kernel spans **all features** across a window of 3 timesteps.  
+  - Output = 64 new learned channels = temporal feature maps.  
+- **Key insight**: out_channels do not need to equal input features — they are **learned representations**, not the raw vitals anymore.  
+- **Important workflow lesson**: It’s counterproductive to go too deep into every abstract detail. Better to balance high-level conceptual clarity with practical coding progress.  
+#### Most Important Takeaways
+- Multiple kernels per convolution → out_channels represent different filters, not original features.  
+- Causal convolution = past-only receptive field (no data leakage).  
+- Permuting `(B, L, F)` → `(B, F, L)` is essential because PyTorch treats features as channels.  
+- Accept that deep technical dives are infinite — need to focus on **pipeline understanding** and **clinical problem-solving**, not just maths. 
 
-**Deliverables**
-	•	A tcn_model.py file defining:
-    •	TemporalBlock (dilated conv + residual).
-    •	TCNModel (stacked blocks + pooling + dense head).
-	•	Unit test with dummy data
-  •	Confirm masking works (padded timesteps ignored).
+### Outcomes
+- **Model architecture completed**:  
+  Built full `TCNModel` with:
+  - Custom `CausalConv1d` layer (length-preserving, causal).  
+  - `TemporalBlock` (2× causal conv + LayerNorm + ReLU + Dropout + residual).  
+  - Stacked blocks with exponential dilation → expanded receptive field.  
+  - Masked mean pooling to summarise patient-level features.  
+  - Optional dense head to refine pooled features.  
+  - Task-specific heads → classification (max_risk, median_risk) + regression (pct_time_high).  
+- **Smoke test passed**:  
+  - Verified model runs end-to-end on dummy data.  
+  - Output shapes confirmed:  
+    - `logit_max`: (B,)  
+    - `logit_median`: (B,)  
+    - `regression`: (B,)  
+- **Conceptual clarity improved**:  
+  - Understood why we permute (B, L, F) → (B, F, L) for Conv1d.  
+  - Clarified role of residuals (stabilise gradient flow).  
+  - Dense head = optional feature mixer before heads.  
+  - Masked pooling = ignore padding → fair comparison across patients.  
+- **Documentation updated**:  
+  - Added explanatory comments in code.  
+  - Wrote detailed notes on causal padding + trimming, input/output shapes, and role of task heads.  
+
+---
+
+## Day 19 Notes - Continue Phase 4: Model training, Validation + Evaluation (Step 3 + 4)
+
+### What We Did Today
+**Completed Full Temporal Convolutional Network (TCN) Training Loop Script `tcn_training_script.py`**
+#### Summary
+* Built a **complete PyTorch training pipeline** for the TCN model.  
+* Covered **data loading, dataset preparation, model building, training, validation, early stopping, and saving best model weights**.  
+* This script forms the core of **Phase 4**, moving from data preparation into real deep learning training.
+### Output
+* `trained_models/tcn_best.pt` — the best-performing model checkpoint (lowest validation loss).  
+* Console logs of **training and validation loss per epoch**.
+### Summary of Flow
+1. Forward pass: model computes predictions for the batch.
+2. Loss computation (BCE, MSE): predictions are compared to true labels → gives loss_max, loss_median, loss_reg.
+3. Combine losses: summed to get overall batch loss.
+4. Backward pass: compute gradients → tells how to adjust weights to reduce loss.
+5. Optimizer step: update weights using the gradients.
+6. Repeat until early stoppage to prevent overfitting.
 
 
+### Design Choices
+1. **Device**
+	-	GPU → massively faster for convolutions, especially with batches of sequences and multiple channels
+	-	CPU is fine for small-scale testing, but for 3 TCNs on 96-hour sequences, it will be slow, limited parallelism.
+  - **Decision**: Use GPU if available (cuda), fallback to CPU. Speedup is huge; batch training and multi-epoch runs become feasible.
+2. **Loss Functions**
+  - Measures the difference/error between predictions (3 model output numbers) and true labels (correct values for that bacth).
+	-	Classification: BCEWithLogitsLoss → binary cross-entropy that takes raw logits from the model instead of probabilities (handles logits directly, which are numerically stable; avoids overflow in sigmoid).
+    - Optionally handle class imbalance using pos_weight = (# negative samples / # positive samples).
+	-	Regression: MSELoss (Mean Squared Error) → penalizes larger errors more than smaller ones. Standard for continuous values (pct_time_high).
+  - **Decision**:
+    - Classification → BCEWithLogitsLoss(pos_weight=...) if imbalance is significant, ensures the model does not ignore rare high-risk patients..
+    - Regression → MSELoss().
+3. **Optimiser**
+	-	Adam → good default for deep networks, adaptive learning rates, handles sparse gradients well.
+	-	Learning rate (LR) = 1e-3 → standard starting point for TCNs. Can reduce later if needed.
+  - **Decision**: Adam(lr=1e-3)
+  - **Reasoning**: Stable, widely used, doesn’t require manual LR decay initially.
+4. **Scheduler (Optional)**
+	-	ReduceLROnPlateau → reduces LR if validation metric stalls and stops improving.
+	-	StepLR → reduces LR every N epochs.
+	-	For efficiency: Start without scheduler for initial baseline training. Add ReduceLROnPlateau only if validation plateaus.
+  - **Decision**: None initially (optional later: ReduceLROnPlateau)
+  - **Reasoning**: Keeps pipeline simple; avoids premature optimisation while debugging.
+5. **Batch Size & Epochs**
+	-	Batch size: 16–64 depending on memory. Start: 16–32 (manageable on typical laptop GPU or CPU).
+	-	Epochs (one full pass through the entire training dataset): start small (10–20) for testing, increase to 50–100 once stable.
+	-	Gradient clipping (optional) if exploding gradients in deep TCNs with long sequences: torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+  - **Decision**: Batch Size 16–32, Epochs 10–20 initially → scale to 50–100, Gradient Clipping max_norm=1.0 optional
+  - **Reasoning**: Balances stability, memory, and speed.
+6. **Validation / Early Stopping**
+	-	Monitor validation metric:
+    - Classification → ROC-AUC (focus on ranking), F1 (balance precision/recall), accuracy.
+    -	Regression → RMSE (mean squared error), R² (proportion of variance explained).
+	-	Early stopping → stop if metric doesn’t improve for patience epochs (5–10).
+  - **Decision**: Early Stopping Patience 5–10 epochs
+	-	**Reasoning**: Allows stopping training if metrics do not improve → prevents overfitting, saves training time, ensures best model on unseen data.
+7. **Dataset / Dataloader**
+	-	Load tensors + masks: train.pt, val.pt, test.pt + masks.
+	-	Create TensorDataset and DataLoader → handles batching, shuffling.
+  - Mask used to ignore padded timesteps during loss calculation.
+  - **Reasoning**: Ensures correct sequence-level learning. Avoids padding noise.
+8. **Forward Pass Logic**
+	-	Model input: (B, L, F)
+	-	Permute to (B, F, L) for PyTorch Conv1d
+	-	Forward through stacked TCN blocks → masked mean pooling → optional dense head → task heads → outputs
+  - **Reasoning**: Preserves causal structure, produces single patient-level vector per task (classification/regression).
+9. **Backpropagation**
+  - Compute loss per task:
+    - loss_max = criterion_max(logit_max, target_max) → How wrong the model is for max_risk classification.
+    - loss_median = criterion_median(logit_median, target_median) → How wrong for median_risk classification.
+    - loss_reg = criterion_reg(regression, target_pct) → How wrong for pct_time_high regression.
+    - total_loss = loss_max + loss_median + loss_reg → Combine all tasks into a single loss.
+  - Backward pass (backprop):
+    -	total_loss.backward() → PyTorch calculates gradients, i.e., how much each weight contributed to the error.
+    -	optimizer.step() → Update the weights according to the gradients (reduce the error).
+    -	optimizer.zero_grad() → Clear old gradients; otherwise, PyTorch accumulates them, ensures that each batch’s gradients are computed independently.
+  - **Reasoning**:
+    - Loss functions (BCE, MSE) measures the difference/error between model output predictions and true labels. 
+    - PyTorch automatically computes the gradient of the loss with respect to every trainable parameter in the model.
+    - A gradient tells the direction and magnitude by which each parameter (weight) should change to reduce the loss.
+    - By computing gradients on total_loss, the model learns jointly across all tasks, joint optimisation across all three tasks.
+    -	Gradients tell model how to adjust kernels to reduce error to make predictions closer to true values.
+10. **Metrics**
+	-	Classification: 
+    - ROC-AUC → ranks predictions correctly (high vs low risk). Best metric for imbalanced data.
+    -	F1-score → balances precision & recall, useful if false positives/negatives matter.
+    -	Accuracy → simple overall correctness; less sensitive to imbalance.
+	-	Regression: 
+    - RMSE → standard deviation of errors. Penalizes large mistakes.
+    - R² → how much variance in target is captured by model.
+	-	**Reasoning**:
+    -	Allows direct comparison with LightGBM baseline.
+    -	Multiple metrics ensure a thorough, clinically-relevant evaluation.
+
+
+### TCN Forward & Backward Pass (Joint Multi-Task)
+
+```text
+             Forward pass
+     Input sequences (B, L, F)
+                 │
+                 ▼
+     Stacked TemporalBlocks (TCN)
+   ┌───────────────┐
+   │ Causal Conv1D │  → extracts temporal features
+   │  + ReLU       │  non-linear patterns
+   │  + LayerNorm  │  stabilises training
+   │  + Dropout    │  prevents overfitting
+   └───────────────┘
+                 │
+                 ▼
+       Masked mean pooling
+   (collapses variable-length sequences → patient-level vector)
+                 │
+                 ▼
+        Optional dense head
+   (Linear → ReLU → Dropout)
+   → combines features across channels before outputs
+                 │
+                 ▼
+        Task-specific heads
+ ┌────────────┬─────────────┬─────────────────┐
+ │ Max        │ Median      │ Regression      │
+ │ classifier │ classifier  │ (pct_time_high) │
+ │ logits     │ logits      │ continuous      │
+ └────────────┴─────────────┴─────────────────┘
+                 │
+                 ▼
+           Compute Losses
+loss_max = BCEWithLogitsLoss(logit_max, target_max)
+loss_median = BCEWithLogitsLoss(logit_median, target_median)
+loss_reg = MSELoss(regression, target_pct)
+total_loss = loss_max + loss_median + loss_reg
+
+             Backward pass
+total_loss.backward()    # compute gradients
+        │
+        ▼
+Gradients flow backward:
+- Task heads → Dense head → Masked pooling → TCN blocks
+- Each weight receives gradient: ∂Loss/∂weight
+- Indicates direction to adjust weights to reduce error
+        │
+        ▼
+optimizer.step()         # update weights using gradients
+optimizer.zero_grad()    # reset gradients for next batch
+```
+**Why It Works**
+1. **Joint optimisation**: 
+  - The three tasks contribute to the same network’s weights. 
+  - The network learns shared temporal patterns useful for all tasks.
+2. **Gradients**: 
+  - A gradient tells the direction and magnitude by which each parameter should change to reduce the loss.
+  - Measure how much each weight contributed to the error.
+    -	Large gradient → weight needs bigger adjustment.
+    -	Small gradient → minor adjustment.
+3. **Iterative improvement**: 
+  - Repeating forward + backward passes over many batches (epochs) gradually reduces loss → better predictions.
+
+
+building target tensors for each split
+
+Without this step:
+	•	You’d have input sequences (x_train) but no ground-truth outcomes to train on.
+	•	This ensures you have paired data:
+(x_train[i], mask_train[i]) → (y_train_max[i], y_train_median[i], y_train_reg[i]).
+
+
+
+(venv) simonyip@MacBookPro ml-models-tcn % python3 tcn_training_script.py
+[INFO] Targets loaded:
+ - train: torch.Size([70]) torch.Size([70]) torch.Size([70])
+ - val: torch.Size([15]) torch.Size([15]) torch.Size([15])
+ - test: torch.Size([15]) torch.Size([15]) torch.Size([15])
+Epoch 1: Train Loss = nan, Val Loss = nan
+Epoch 2: Train Loss = nan, Val Loss = nan
+Epoch 3: Train Loss = nan, Val Loss = nan
+Epoch 4: Train Loss = nan, Val Loss = nan
+Epoch 5: Train Loss = nan, Val Loss = nan
+Epoch 6: Train Loss = nan, Val Loss = nan
+Epoch 7: Train Loss = nan, Val Loss = nan
+Early stopping at epoch 7
+Training complete. Best model saved to tcn_best.pt
+(venv) simonyip@MacBookPro ml-models-tcn % 
+
+The nan losses from epoch 1 onward mean something blew up numerically before training could even start learning. This is a data/input issue, not the TCN code itself.
+Either the data fed into the model was invalid (NaNs, wrong label encoding), or the optimiser blew up due to too-high learning rate + extreme inputs.
+
+added this code inot the script to figure out what was the issue:
+
+print(y_train_max.unique())
+print(y_train_median.unique())
+print(y_train_reg.min(), y_train_reg.max())
+
+print(torch.isnan(x_train).any(), torch.isinf(x_train).any())
+
+output
+
+tensor([0., 2., 3.])   # max_risk
+tensor([0., 2.])       # median_risk
+
+→ These are not binary {0,1}.
+But BCEWithLogitsLoss requires strictly 0.0 or 1.0 targets.
+
+
+Exactly ✅ — you nailed the first point:
+	•	In patient_df, the columns max_risk and median_risk are ordinal scores (0–3).
+	•	In prepare_tcn_dataset.py, you already derived binary versions (max_risk_binary, median_risk_binary).
+	•	When building targets for the TCN, you should load those binary columns, not the raw ordinal ones. That’s why BCEWithLogitsLoss broke.
+
+fixed with this code in tcn_training_script.py:
+
+target_cols = ["max_risk_binary", "median_risk_binary", "pct_time_high"]
+
+then, still failed, as in the prepare_tcn_dataset.py the chnages were made to a copy, so the csv is still the same csv wiothout the binary columns so we will have to regenerate those columns manually in our training script loading patient-level targets:
+
+# Recreate binary targets (same logic as in prepare_tcn_dataset.py)
+patient_df["max_risk_binary"] = patient_df["max_risk"].apply(lambda x: 1 if x > 2 else 0)
+patient_df["median_risk_binary"] = patient_df["median_risk"].apply(lambda x: 1 if x == 2 else 0)
+
+
+
+Why this works
+	•	The classification heads (BCEWithLogitsLoss) expect binary labels.
+	•	By regenerating the binary columns here, you guarantee the labels are in the right format (0/1).
+	•	You also avoid contaminating your preprocessing pipeline with duplicate CSVs.
+
+
+output:
+
+tensor(True) tensor(False)
+
+  → True for torch.isnan(x_train).any() means your inputs contain NaNs.
+That alone would break training, even if labels were fine.
+Before saving tensors in prepare_tcn_dataset.py, replace NaNs with zeros:
+🔎 Where the NaNs come from
+
+NaNs appear in your timestamp-level dataset (news2_features_timestamp.csv) before padding to tensors.
+Causes include:
+	•	Some vitals/labs missing at certain times.
+	•	Derived features (rolling means, slopes) computed from empty windows.
+	•	Masking logic leaving NaNs in padded rows.
+
+fix in prepare_tcn_dataset.py then reran script to produce new tensors all fixed:
+
+# Clean NaNs and Infs in feature columns
+df[feature_cols] = df[feature_cols].fillna(0.0)
+df[feature_cols] = df[feature_cols].replace([np.inf, -np.inf], 0.0)
+
+
+#### Summary Output
+**Console Log Output**
+```md
+[INFO] Targets loaded:
+ - train: torch.Size([70]) torch.Size([70]) torch.Size([70])
+ - val: torch.Size([15]) torch.Size([15]) torch.Size([15])
+ - test: torch.Size([15]) torch.Size([15]) torch.Size([15])
+Epoch 1: Train Loss = 1.3526, Val Loss = 1.0035
+Epoch 2: Train Loss = 1.0111, Val Loss = 0.9588
+Epoch 3: Train Loss = 0.9176, Val Loss = 0.9345
+Epoch 4: Train Loss = 0.8535, Val Loss = 0.9422
+Epoch 5: Train Loss = 0.7503, Val Loss = 0.9841
+Epoch 6: Train Loss = 0.6506, Val Loss = 1.0733
+Epoch 7: Train Loss = 0.6013, Val Loss = 1.1456
+Epoch 8: Train Loss = 0.5326, Val Loss = 1.1734
+Epoch 9: Train Loss = 0.4867, Val Loss = 1.2066
+Epoch 10: Train Loss = 0.5096, Val Loss = 1.2203
+Early stopping at epoch 10
+Training complete. Best model saved to tcn_best.pt
+tensor([0., 1.])
+tensor([0., 1.])
+tensor(0.) tensor(0.4407)
+tensor(False) tensor(False)
+```
+**Key Concepts**
+- **Training loss**: 
+  - Quantifies how well a model is performing on the data it is actively learning from.
+  - Computed by comparing the model’s predictions with the known labels in the training set using a defined loss function (e.g., MSE, BCE).
+  - A **decreasing training loss** over epochs indicates the model is successfully adjusting its parameters to fit the training data.
+- **Validation Loss**:
+  - Measures the model’s performance on unseen data that was not used during training.
+  - Serves as an estimate of the model’s generalisation ability (how well it can predict new, real-world data).
+  - A **validation loss that decreases along with training loss** indicates good learning, while a validation loss that rises despite decreasing training loss signals potential overfitting.
+- **Overfitting**
+	-	Overfitting occurs when a model learns noise or specific patterns in the training data that do not generalise to new data.
+	-	**Symptoms**: training loss continues to decrease, but validation loss stagnates or increases.
+	-	Overfitting reduces the predictive usefulness of a model and is more likely when training data is limited or the model is very complex relative to the dataset size.
+- **Early Stopping**
+	-	Early stopping is a regularisation technique that halts training when validation loss stops improving for a specified number of epochs (patience).
+	-	This prevents the model from overfitting to the training data and helps retain the parameters that produced the best validation performance.
+	-	It is widely used in deep learning to ensure training efficiency and model generalisation.
+- **Why These Concepts Matter**
+	-	Monitoring both training and validation loss is crucial to understand the learning dynamics of a model.
+	-	Balancing model capacity and generalisation ensures that the model performs well not just on the training data but also on new, unseen data.
+	-	Early stopping, combined with proper loss monitoring, is a simple yet effective method to improve model reliability and prevent wasted computation.
+**What happened in the run**
+- **Epoch 1–3**: 
+  - Both training loss and validation loss decreased steadily (Train: 1.35 → 0.92, Val: 1.00 → 0.93).
+	- The model was learning and generalising well during these initial epochs.
+- **Epoch 4–5**: 
+  - Training loss continued to decrease (0.85 → 0.75), but validation loss started to slightly rise (0.94 → 0.98).
+	-	This indicates the beginning of overfitting → the model is fitting training data more closely than the validation data.
+- **Epoch 6–10**: 
+  - Training loss kept dropping (0.65 → 0.51), but validation loss increased further (1.07 → 1.22).
+	-	The model is overfitting more strongly → it memorises training patterns but loses generalisation to unseen validation data.
+- **Early stopping**: 
+  - Triggered at epoch 10.
+	-	Training stopped automatically to prevent further overfitting.
+	- The best model weights were saved from the epoch with the lowest validation loss (around epoch 3).
+**The debug prints at the end show**:
+-	`y_train_max.unique()` → tensor([0., 1.]) → binary max_risk target is now properly 0/1.
+- `y_train_median.unique()` → tensor([0., 1.]) → median_risk_binary now has both 0s and 1s, no transformation issues.
+- `y_train_reg.min()`, `y_train_reg.max()` → (0., 0.4407) → regression target is bounded and healthy.
+- `torch.isnan(x_train).any()`, `torch.isinf(x_train).any()` → (False, False) → input tensors are now clean (no NaNs/Infs).
+**Interpretation**:
+- Training script works and is stable.
+-	The model was able to learn meaningful patterns early in training, but began overfitting which is expected given the dataset is small (70 train patients). 
+-	Validation loss rising after epoch 3–4 shows that further training without regularisation would harm generalisation.
+- Early stopping worked correctly to preserve the best model.
+- Losses behave as expected, and the best model is saved automatically.
+-	The input data and target tensors are correctly preprocessed and usable.
+**Next Steps**:
+-	Perform final evaluation on test set using tcn_best.pt
+-	**Compute metrics**: ROC-AUC, F1, accuracy (classification); RMSE, R² (regression)
+-	**Generate visualisations**: loss curves, ROC curves, calibration plots
+-	Compare TCN performance to LightGBM baseline for clinical and technical validation.
