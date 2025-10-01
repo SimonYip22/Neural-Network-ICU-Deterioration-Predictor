@@ -4,6 +4,57 @@
 
 ## Day 1: NEWS2 Data Extraction and Preliminary Scoring
 
+### Phase 1: Baseline NEWS2 Tracker (Steps 1-4)
+**Goal: Extract, clean, and compute NEWS2 scores from raw synthetic EHR data. Establish a reproducible pipeline for clinical scoring and patient-level summarisation.**
+1. **Dataset Preparation**
+	-	Downloaded synthetic MIMIC-IV demo dataset (`mimic-iv-clinical-database-demo-2.2.zip`) and unzipped CSV files.
+	-	Explored `chartevents.csv` and other relevant CSVs to identify required vitals for NEWS2 scoring.
+	-	**Reasoning**: Understanding raw data structure and units is critical for accurate downstream scoring.
+2. **Data Extraction**
+	-	Wrote `extract_news2_vitals.py` to extract NEWS2-relevant vitals from all CSVs.
+	-	Standardised headers and extracted only required columns.
+  - Implemented CO₂ Retainer identification code to identify patients meeting CO₂ retainer criteria:
+    -	PaCO₂ > 45 mmHg
+    -	pH 7.35–7.45
+    -	ABG measurements ±1 hour apart
+	-	Updated vitals dataset `news2_vitals.csv` to include CO₂ retainer status `news2_vitals_with_co2.csv`.
+  - **Created helper/inspection script**: `check_co2_retainers.py` to identify patients meeting CO₂ retainer criteria and check logic of `extract_news2_vitals.py`. 
+  -	**Defensive Coding & Sanity Checks**:
+    -	Added checks for missing columns before merges.
+    -	Assigned default values for missing vitals (0 or False).
+    -	Handled duplicates and avoided _x/_y conflicts.
+	-	**Generated**:
+    - `news2_vitals.csv` → original extracted vitals before retainer logic implemented (file not used)
+    -	`news2_vitals_with_co2.csv` → vitals with retainer flags 
+    -	`co2_retainer_details.csv` → patient-specific CO₂ retainer information
+	-	**Reasoning**: 
+    - Creates a clean, consistent dataset while preventing KeyErrors, duplicates, or missing column issues during NEWS2 computation. Clean input for NEWS2 computation and CO₂ retainer checks.
+    - `check_co2_retainers.py` ensures accurate oxygen scoring according to NEWS2 rules; future-proof for real datasets.
+    - `co2_retainer_details.csv` makes sure that retainer patients actually do/don't exist.
+4. **NEWS2 Scoring**
+	-	**Implemented `compute_news2.py` with**:
+    -	Dictionaries defining threshold-to-score mappings for each vital
+    -	Functions to compute individual vital scores
+    -	Aggregated to total NEWS2 per timestamp
+	-	Pivoted wide-format CSV with all expected vitals (`respiratory_rate, spo2, supplemental_o2, temperature, systolic_bp, heart_rate`)
+	-	Safely merged GCS components to compute `gcs_total` and `level_of_consciousness`
+  - **Human-readable labels**: `consciousness_label`, `supplemental_o2_label`, `co2_retainer_labelv added for clarity and safety.
+	-	**Outputs**:
+    -	`news2_scores.csv` → per-timestamp NEWS2 scores
+    -	`news2_patient_summary.csv` → per-patient aggregates (min, max, mean, median scores)
+	-	**Reasoning**: Produces ready-to-use datasets for later baselines or predictive modelling.
+**End Products of Phase 1**
+-	`news2_scores.csv` → timestamp-level NEWS2 scores
+-	`news2_patient_summary.csv` → patient-level aggregate scores
+-	`co2_retainer_details.csv` → CO₂ retainer info
+-	**Clean Python scripts**:
+	-	`extract_news2_vitals.py`
+	-	`check_co2_retainers.py`
+	-	`compute_news2.py`
+-	**Documentation**: 
+  - Notes on scoring rules, defensive coding practices, GCS and FiO₂ handling, and pipeline reproducibility
+  - Safe pipeline capable of handling missing columns, duplicate merges, and incomplete clinical data.
+
 ### Pipeline Overview
 
 ```text
@@ -203,6 +254,63 @@ Final NEWS2 scores per patient
 ---
 
 ## Day 3 Notes — Validating NEWS2 Scoring & ML Pipeline Preparation
+
+### Phase 2: Preprocess Data for ML-Models (Steps 1-4)
+**Goal: Transform NEWS2 timestamp and patient-level data into ML-ready features for tree-based models (LightGBM) and Neural Networks (TCN). Handle missing data, temporal continuity, and encode risk labels while preserving clinical interpretability.**
+1. **Validating NEWS2 Scoring**
+  - **Action**: Ran `validate_news2_scoring.py` on test dictionaries.
+  - **Findings**:
+    - Low GCS cases initially produced incorrect scores.
+    - The scoring function ignored consciousness because row.get("level_of_consciousness", pd.NA) returned pd.NA.
+    -	Other special cases (SpO₂, supplemental O₂) were correctly scored because their thresholds were handled explicitly.
+  - **Fixes**: Moved `if pd.isna(value): return 0` **to the end of the function**.
+  - **Outcome**: All unit tests passed, learned the importance of understanding intermediate variables in scoring pipelines.
+  - The main pipeline did not have these problems as `gcs_total` is converted into `level_of_consciousness` before the scoring is called, so there was no missing keys.
+2. **Missing Data Strategy**
+  - **Timestamp-level features**:
+    - Use LOCF (Last Observation Carried Forward) to maintain temporal continuity.
+    - Add missingness flags (1 if value was carried forward) so models can learn from missing patterns.
+    - **Justification**: mimics clinical reality; preserves trends; Tree-based models like LightGBM handle NaNs naturally.
+  - **Patient-level summary features**:
+    - Use median imputation per patient timeline if a vital is missing across some timestamps.
+    -	Include % of missing timestamps as a feature.
+    -	**Justification**: balances robustness with bias avoidance; prevents skewing min/max/mean statistics.
+  -	**Key decisions**:
+    -	Do not fill population median at timestamp-level (would break temporal continuity).
+    -	Only fill median at patient summary level if some timestamps exist; otherwise, leave as NaN or optionally fallback to population median.
+3. **Prepare Timestamp-Level Features `make_timestamp_features.py`**:
+  1. Start from `news2_scores.csv` (all vitals + NEWS2 + escalation labels).
+    - Parse `charttime` as `datetime`.
+    - Sort by `subject_id` & `charttime`.
+  2. Create missingness flags for each vital (before fills).
+  3. LOCF forward-fill per subject (optionally backward-fill for initial missingness or leave as NaN), do not use population median.
+  4. Create carried-forward flags (binary indicator - 1 if the value came from LOCF). Helps ML distinguish between observed vs assumed stable, exploit missingness patterns (e.g. vitals measured more frequently when patients deteriorate).
+  5. **Compute rolling windows (1h, 4h, 24h)**: mean, min, max, std, count, slope, AUC.
+  6. Compute time since last observation (`time_since_last_obs`) for each vital (staleness per vital).
+  7. **Encode risk/escalation labels**: Convert textual escalation/risk labels → numeric ordinal encoding (`Low=0, Low-Medium=1, Medium=2, High=3`) for ML. Keeps things simple - one column, easy to track in feature importance
+  8. Save `news2_features_timestamp.csv` (ML-ready). 
+  **Rationale**:
+  - Trees can leverage trends and missingness.
+  -	Rolling windows capture short-, medium-, and long-term deterioration patterns.
+  -	Timestamp features feed ML models like LightGBM directly without further preprocessing.
+4. **Preparing Patient-Level Features `make_patient_features.py`**:
+  1. Load input file `news2_scores.csv`. 
+  2. **Group by patient**: Aggregate vitals per patient timeline (median, mean, min, max per vital).
+  3. **Per-Patient Median imputation**: Fill missing values for each vital using patient-specific median (so their profile isn’t biased by others), if a patient never had a vital recorded, fall back to population median.
+  4. **Compute % Missingness per vital**: Track proportion of missing values per vital before imputation (HR missing in 30% of their rows = 0.3), missingness itself may signal clinical patterns (e.g. some vitals only measured in deteriorating patients).
+  5. **Encode risk/escalation labels**: Ordinal encoding (Low=0, Low-Medium=1, Medium=2, High=3), calculate summary stats per patient: max risk (highest escalation they reached), median risk (typical risk level), % time at High risk (what fraction of their trajectory was spent here).
+  6. **Output**: Save `news2_features_patient.csv` (compact, one row per patient, ML-ready summary).
+  **Rationale**:
+  -	Median imputation preserves patient-specific patterns without introducing bias from other patients.
+  -	% Missing captures signal from incomplete measurement patterns.
+  -	Ordinal risk encoding simplifies downstream ML model input while retaining interpretability. Together, these three summary features summarise a patient’s escalation profile across their stay. Proportion features (like % high) are standard numeric features (not encoded categories).
+  -	This is enough for model; don’t need optional metrics like streaks, AUC, or rolling windows for the patient summary.
+**Outputs of Phase 2**
+- **Scripts**:
+  -	`news2_features_timestamp.csv` → ML-ready timestamp-level dataset with features, rolling windows, missingness flags, and encoded risk.
+  -	`news2_features_patient.csv` → ML-ready patient-level summary dataset with aggregated features and escalation metrics.
+-	Validated NEWS2 scoring function and pipeline, ensuring correct handling of GCS, FiO₂, supplemental O₂, CO₂ retainers, and missing data.
+-	Defensive coding practices for merges, missing columns, and idempotent transformations.
 
 ### Goals
 - Validate NEWS2 scoring logic
@@ -805,6 +913,112 @@ Only Steps 1-2 were implemented today; Steps 3-6 remain.
 
 ## Day 9 Notes – Patient Dataset Preparation for LightGBM
 
+### Phase 3: LightGBM Training + Validation (Steps 1–7)
+**Goal: Train, validate, and document a LightGBM model on patient-level features, producing a polished, interpretable baseline and deployment-ready models for all three targets (`max_risk, median_risk, pct_time_high`).**
+1. **Dataset Preparation `prepare_patient_dataset.py`**
+  - Load processed patient-level features `news2_features_patient.csv`.
+  - **Binary target conversion**:
+    - `max_risk`: 0–2 → 0 (not high risk), 3 → 1 (high risk)
+    -	`median_risk`: 0–1 → 0 (low risk), 2 → 1 (medium risk)
+  - **Define modelling types**:
+    -	`max_risk` → binary classifier: high-risk vs not high-risk.
+    -	`median_risk` → binary classifier: medium-risk vs low-risk.
+    -	`pct_time_high` → continuous regression target.
+  - Separate features (X) and targets (y):
+  - Verify datatypes, shapes, and missing values.
+  - **K-Fold Setup**:
+    - 5-fold cross-validation for all targets.
+    -	`StratifiedKFold` for classification (`max_risk, median_risk`) to preserve minority class distribution.
+    -	`Standard KFold` for regression (`pct_time_high`) as class balance not relevant.
+	-	**Reasoning**: 
+    - This step prepares X_train, y_train, X_test, y_test for CV.
+    - CV + binary conversion preserves minority class distribution, giving stable estimates.
+    - Ensures stable and reproducible evaluation on a small dataset (100 patients).
+2. **Model Initialisation & Quick Test `initial_train_lightgbm.py`**
+  - **Initialise LightGBM models**:
+    - `LGBMClassifier` → `max_risk, median_risk`
+    - `LGBMRegressor ` → `pct_time_high`
+  - Set baseline parameters and `random_state=42` for reproducibility.
+	-	Skipped full training for initial tests; ran quick fit on small subset (10) to check pipeline, feature-target alignment, and X/y shapes.
+	-	**Reasoning**: 
+    - Ensures pipeline works end-to-end before full CV training. 
+    - Catches misalignments, missing values, or type errors early.
+3. **Model Training and Validation (Cross-Validation) `complete_train_lightgbm.py`**
+  - Loop through all targets (creates 3 models)
+  - **Train models on 4 folds, validate on 1**:
+    -	Fit with early stopping on training folds.
+    -	**Evaluate on validation folds**
+      - Load saved models, generate predictions on validation folds.
+      - **Compute fold-wise metrics**:
+        -	ROC-AUC (primary) and Accuracy (fallback) for classifiers.
+        -	RMSE/MSE for regression.
+      - Aggregate feature importance across folds per target.
+	-	**Store per-fold outputs**: trained models, fold metrics, and feature importance.
+  - **Outputs (`baseline_models/`)**:
+  	-	3 targets × 5 folds = 15 trained models → `{target}_fold{n}).pkl`
+	  -	15 feature importance CSVs → `{target}_fold{n}_feature_importance.csv`
+	  -	3 CV result CSVs (scores per fold per target) → `{target}_cv_results.csv`
+	  - Training summary (target name, dataset shape (100,40), mean CV score, top 10 features) → `training_summary.txt`
+	-	**Reasoning:** 
+    - Cross-validation provides unbiased performance estimates and reproducible models.
+    - Fold-wise outputs allow reproducibility and further analysis.
+    - Feature importance per fold supports interpretability.
+4. **Hyperparameter Tuning `tune_models.py`**
+  - **Tune key parameters for stability and performance**: `learning_rate`, `max_depth` / `num_leaves`, `n_estimators`, `min_data_in_leaf`.
+	-	**Evaluate using 5-fold CV**:
+    -	ROC-AUC / Accuracy for classifiers.
+    -	RMSE for regression.
+  - **Outputs (`hyperparameter_tuning_runs/`)**:
+    -	`best_params.json` (per target)
+    -	`*_cv_results.csv` (fold-wise CV scores)
+    -	`tuning_logs/` (all tuning parameter sets and scores)
+  -	**Rationale**: 
+  	-	Optimises baseline performance without overfitting.
+	  -	Produces reproducible, interpretable models.
+	  -	Ensures portfolio credibility.
+5. **Feature Importance Aggregation `feature_importance.py`**
+	- Load per-fold feature importance CSVs.
+	-	Aggregate across folds, compute mean importance.
+	-	Generate bar plots of top 10 features per target.
+  - **Outputs (`feature_importance_runs/`)**:
+    -	3x `{target}_feature_importance.csv`
+    -	3x `{target}_feature_importance.png`
+  - **Reasoning**:
+    -	Highlights which features drive predictions.
+    -	Supports interpretability for clinical stakeholders.
+    -	Visual outputs are portfolio-ready.
+6. **Final Model Training (Deployment-Style Models) `train_final_models.py`**
+	- Train one final model per target using the entire 100-patient dataset.
+  - Apply best hyperparameters from tuning.
+  - Save models for deployment/demo purposes.
+  - **Outputs (`deployment_models/`)**: 3x `{target}_final_model.pkl`
+	-	**Reasoning**:
+    - Produces the best possible trained model using all available data.
+    -	**Matches real-world practice**: once validated, you don’t throw away data, you train on the full cohort.
+    -	Produces 3 clean, reproducible, deployment-ready final models.
+    - Allows demonstration of classifier + regressor outputs in portfolio.
+7. **Portfolio-Ready Summary `summarise_results.py`**
+  - Compile CV scores, best hyperparameters, feature importance.
+	-	Save plain-text portfolio-ready summary.
+  - **Output**:`deployment_models/training_summary.txt` (portfolio-ready summary including CV scores, hyperparameters, top features).
+  - **Reasoning**:
+    - Transparent reporting of methodology.
+    -	Provides a reproducible baseline for comparison with Neural Networks (Phase 4).
+**Why Not Go Further**
+- Phase 3 makes LightGBM phase complete, credible, and deployment-worthy without unnecessary over-optimisation.
+- **Ensembling (stacking, blending, bagging multiple LightGBM models)**: adds complexity without new insights → not unique for a portfolio.
+- **Nested CV**: more statistically rigorous, but overkill for 100 patients; doesn’t change credibility.
+- **Bayesian optimisation / AutoML**: looks flashy, but to recruiters it signals you know how to use a library, not that you understand the fundamentals.
+- **Overfitting risk**: with 100 patients, “chasing” tiny gains just makes results unstable and less reproducible.
+- **Time sink**: delays me getting to Neural Nets (the unique, impressive part of your project).
+**Phase 3 Pipeline**:
+- **Pipeline credibility**: flly reproducible, stratified CV for imbalanced classification, deployment-ready models.
+- **Portfolio messaging**:
+  - Small datasets require pragmatic design choices (binary targets, fold selection) to produce credible results.
+	- Phase 3 demonstrates handling messy, small clinical datasets.
+	-	**Shows robust ML pipeline**: data prep → CV → training → tuning → feature importance → final models.
+	-	Explains methodological pivot (from rare-event classification to trend/regression) as a real-world research adaptation.
+
 ### Goals
 - Begin **Phase 3: LightGBM training and validation (steps 1-2)**
 - Focus on dataset preparation and initial model setup and checks, not full training yet
@@ -1065,7 +1279,7 @@ y_test  = labels   for patients in fold 5
 5. Adds interpretability through feature importance, crucial in clinical healthcare settings.
 6. Establishes a strong baseline Performance benchmark for later comparison with Neural Networks, showing their added value.
 
-### Phase 3: LightGBM Training + Validation (Steps 1–8) Finalised 
+### Phase 3: LightGBM Training + Validation (Steps 1–9) Finalised 
 **Goal: Train, validate, and document a LightGBM model on patient-level features, producing a polished, credible baseline.**
 1. **Dataset Preparation**
   - Load processed patient-level features.
@@ -1821,8 +2035,8 @@ src/
 
 ## Day 14-16 Notes - Start Phase 4: Plan Entire Neural Network Pipeline & Complete Dataset Preparation (Step 1)
 
-### Phase 4: Temporal Convolutional Network (TCN) Training + Validation (Steps 1-6)
-**Goal: Build, validate, and document a temporal deep learning model (TCN) on sequential EHR features. Directly compare against the Phase 3 LightGBM baseline to demonstrate mastery of both classical ML and modern deep learning.**
+### Phase 4: Temporal Convolutional Network (TCN) Training + Validation (Steps 1-5)
+**Goal: Build, validate, and document a temporal deep learning model (TCN) on sequential EHR features. Deliver a trained model (`tcn_best.pt`) that generalises well on validation data.**
 1. **Dataset Preparation (Sequential Features)**
   - **Input**: timestamp-level EHR data (vitals, labs, obs) `news2_features_timestamp.csv`, `news2_features_patient.csv`
   - **Output**: padded sequences ready for temporal modelling.
@@ -1859,41 +2073,31 @@ src/
     - Residual connections + LayerNorm = stable training, even with many blocks.  
     - Chosen as a modern, efficient alternative to RNNs (LSTM/GRU) and Transformers, showing a deliberate design choice.  
 3. **Model Training**
-	- **Loss functions**: Binary cross-entropy (classification), MSE (regression).
-	-	**Class imbalance**: Use pos_weight in BCE loss.
-	-	**Regularisation**: dropout + early stopping on validation AUC/RMSE.
-	-	**Optimiser**: Adam with learning-rate scheduler (reduce on plateau). 
-  - **Reasoning**: Solid, no gimmicks. Shows deep learning maturity (correct loss functions, imbalance handling, monitoring).
-4. **Validation + Evaluation**
-	- **Cross-validation style**: patient-level splits (train/val/test).
-	-	**Metrics**: ROC-AUC, F1, accuracy (classification), RMSE, R² (regression).
-	- **Compare head-to-head**: LightGBM baseline vs. TCN.
-	- **Highlight trade-offs**: performance gains, interpretability loss.
-  - **Reasoning**: Demonstrates scientific discipline. Not “neural nets are better,” but fair baseline comparison.
-5. **Interpretability**
-	-	**Feature/time saliency**: Use integrated gradients or Grad-CAM-style saliency over time steps.
-	-	**Purpose**: Show what time periods/features drive the prediction.
-  - **Reasoning**: clinician-technologist wow factor, not just a black box, but clinically interpretable.
-6. **Model Saving + Deployment-Readiness**
-	-	Save trained TCNs (.pt PyTorch models).
-	-	Save preprocessing pipeline (scalers, padding rules).
-	-	**Export inference script**: given raw EHR time series → returns risk score.
-  - **Reasoning**: we don't just train an ML model, show we know how to package ML into something usable and deployment-ready.
-**Documentation**
-  - **README additions**:
-    -	Clear separation: Phase 3 (LightGBM baseline) vs Phase 4 (TCN).
-    -	Diagram of pipeline (raw EHR → preprocessing → TCN).
-    -	Reflections on interpretability + clinical relevance.
-	- **Notes.md**: Capture debugging lessons (e.g. imputation pitfalls, consciousness bug fix).
+	- **Loss functions**: Binary cross-entropy (for classification heads), MSE (regression).
+	-	**Optimiser**: Adam with learning-rate scheduler (reduce on plateau).
+	-	**Regularisation**: dropout within TCN, gradient clipping, early stopping (patience=7).
+	-	**Training loop**: forward → compute loss for all 3 tasks → backward → gradient clipping → optimiser update.
+  - **Reasoning**: This phase ensures the model learns from patient sequences in a stable, controlled way. Shows deep learning maturity (correct loss functions, imbalance handling, monitoring).
+4. **Validation (during training)**
+	-	**Setup**: Patient-level validation split (not seen during training).
+	-	**Metrics tracked**: Validation loss per epoch.
+	-	**Logic**:
+    -	When validation loss improves → save checkpoint (`tcn_best.pt`).
+    -	When validation loss stagnates/gets worse → patience counter increases.
+    -	Training stops early when overfitting begins.
+  - **Reasoning**: Validation ensures the model generalises and doesn’t just memorise training data.
+5. **Generate Visualisations**
+	-	Training vs Validation loss curves (per epoch) → `plots/loss_curve.png`
+  - **Reasonings**: focus on training behaviour and convergence, show whether the model converged, where early stopping kicked in, whether overfitting started.
 **Why Not Go Further**
-- Do not need ensembling, hyperparameter sweeps, AutoML, Transformers.
-- Adds weeks, recruiters won’t care as “too much for too little.”
-- Need a polished baseline (LightGBM) + polished deep temporal model (TCN). That contrast is the unique technical story.
+- Skip ensembling, hyperparameter sweeps, AutoML, Transformers.
+- Adds weeks of complexity with minimal recruiter payoff.
+- Phase 4’s goal is just to train a robust, reproducible TCN.
 **End Products of Phase 4**
--	3 TCN models (2 classification + 1 regression) trained + validated, keep targets constant, only change the modelling approach.
--	Direct comparison with 3 LightGBM models.
--	Deployment-style saved models + inference script.
--	Documentation proving we can take raw messy clinical data → interpretable deep model → fair comparison with classical ML.
+- `trained_models/tcn_best.pt`
+- Logs of training + validation loss curves
+- Debugged and reproducible training + validation pipeline.
+- **Notes.md**: Diagram of pipeline (raw EHR → preprocessing → TCN), capture debugging lessons (e.g. imputation pitfalls, consciousness bug fix).
 
 ### Goals
 -	Build a robust, reproducible temporal dataset for TCN training.
@@ -2695,24 +2899,126 @@ timestep 3: [x1, x2, x3] → output3
 
 ---
 
-## Day 19 Notes - Continue Phase 4: Model training, Validation + Evaluation (Step 3 + 4)
+## Day 19-20 Notes - Continue Phase 4: Model Training + Validation (Step 3 + 4)
+
+### Goals 
+- Complete full TCN training and validation script `tcn_training_script.py`.
+- Run full TCN training loop  without runtime errors.  
+- Correct and debug any script errors. 
+- **Verify training + validation pipeline**:  
+  - Track per-epoch training and validation loss.  
+  - Confirm early stopping saves best checkpoint (`tcn_best.pt`).  
+- **Sanity-check labels and inputs with debug prints**:  
+  - Binary targets (`0/1`) confirmed.  
+  - Regression target bounded between `0.0–0.44`.  
+  - Input tensors clean (no NaNs/Infs).  
 
 ### What We Did Today
 **Completed Full Temporal Convolutional Network (TCN) Training Loop Script `tcn_training_script.py`**
 #### Summary
-* Built a **complete PyTorch training pipeline** for the TCN model.  
-* Covered **data loading, dataset preparation, model building, training, validation, early stopping, and saving best model weights**.  
-* This script forms the core of **Phase 4**, moving from data preparation into real deep learning training.
+- Built a **complete PyTorch training pipeline** for the TCN model.  
+- Covered **data loading, dataset preparation, target construction, model definition, training, validation, early stopping, and checkpoint saving**.  
+- **Introduced key deep learning concepts**: loss functions, optimisers, gradient flow, overfitting prevention, early stopping, and learning rate scheduling.
+- This script forms the core of **Phase 4**, moving from data preparation into real deep learning training.
 ### Output
-* `trained_models/tcn_best.pt` — the best-performing model checkpoint (lowest validation loss).  
-* Console logs of **training and validation loss per epoch**.
+- `trained_models/tcn_best.pt` — the best-performing model weights (lowest validation loss).  
+- Console logs of **training and validation loss per epoch**, with early stopping.
+- **Debug prints confirming**:
+	-	Binary targets (`y_train_max`, `y_train_median`) are clean.
+	-	Regression target (`y_train_reg`) is bounded, no NaNs/Infs.
+-	Confirmed the pipeline runs end-to-end with no runtime errors.
+### Step-by-Step Flow
+1. **Imports & Config**
+	-	Import PyTorch, Pandas, JSON, and our custom TCNModel.
+	-	**Define hyperparameters**:
+    -	`DEVICE` (GPU/CPU)
+    -	`BATCH_SIZE`, `EPOCHS`, `LR` (learning rate)
+    -	`EARLY_STOPPING_PATIENCE` (stop when val loss doesn’t improve).
+  -	Create `MODEL_SAVE_DIR` → ensures trained models are stored.
+2. **Load Prepared Data**
+	-	Use `torch.load()` to bring in padded sequence tensors (`x_train, mask_train` etc.) created from `prepare_tcn_dataset.py`.
+	-	These are the time-series features per patient, already standardised + padded to equal length.
+	-	Masks mark valid timesteps vs padding (prevents model from “learning noise”).
+3. **Build Target Tensors (Patient Labels)**
+	-	Load patient-level CSV (`news2_features_patient.csv`).
+	-	**Recreate binary labels**:
+    -	**max_risk_binary**: high vs not-high risk.
+    -	**median_risk_binary**: low vs medium.
+	-	Load splits (`patient_splits.json`) so each patient is consistently assigned to train/val/test.
+	-	Define `get_targets()`:
+    -	Pulls the right patients.
+    -	Converts labels into PyTorch tensors (`y_train_max, y_train_median, y_train_reg`) for each split.
+  - **Rationale**: features (time-series) and labels (patient outcomes) are stored separately. We need to align them so that each input sequence (x_train) has its corresponding target outcome (ground-truth) to train on. This ensures you have paired data: (`x_train[i], mask_train[i]`) → (`y_train_max[i], y_train_median[i], y_train_reg[i]`).
+4. **TensorDatasets & DataLoaders**
+	-	TensorDataset groups together (inputs, masks, targets) into one dataset object.
+	-	**DataLoader breaks this dataset into mini-batches**:
+    -	batch_size=32 → model sees 32 patients per step.
+    -	shuffle=True for training → prevents learning artefacts from patient order.
+  - **Rationale**: mini-batching improves GPU efficiency and stabilises gradient descent.
+5. **Model Setup**
+  - Defines the architecture (what the model looks like, how it processes inputs).
+	-	**Instantiate TCNModel with**:
+    -	Input dimension = 171 features.
+    -	**Residual conv blocks**: [64, 64, 128] → 3 conv blocks with number of channels (filters/kernels). Residual is defined within the block.
+    -	**Dense head**: 64 neurons → mixes all features before final outputs (comes once, after the stack finishes)
+	-	Send model to GPU/CPU (.to(DEVICE)).
+6. **Loss Functions**
+  - We train on three parallel tasks (multi-task learning). 
+  - Each target needs its own loss, calculated by the loss function:
+    -	`criterion_max / criterion_median`: BCEWithLogitsLoss → binary classification.
+    -	`criterion_reg`: MSELoss → regression task.
+7. **Optimiser + Scheduler**
+  - Uses batch-by-batch output heads from the dense head to optimise parameters. 
+	-	Optimiser = Adam with LR=1e-3.
+	-	Scheduler = ReduceLROnPlateau (halves LR if val loss plateaus).
+  - **Rationale**: 
+    - Adam adapts learning rate per parameter → faster convergence. 
+    - Scheduler prevents the model from “getting stuck”.
+8. **Training Loop**
+	-	Loop over epochs (one full pass through the entire training dataset).
+  - Network jointly learns classification and regression.
+	-	**For each batch**:
+    -	Forward pass → model predicts 3 outputs (`logit_max, logit_median, regression`).
+    -	Compute losses with loss functions for all 3 tasks → compare predictions to true labels (`y_max, y_median, y_reg`).
+    - Combine losses into 1 (`loss = loss_max + loss_median + loss_reg`) → one scalar loss value means each task contributes equally (multi-task learning).
+    -	Backward pass → calculate gradients of this total loss w.r.t. every model parameter.
+    -	Gradient clipping (`clip_grad_norm_`) → prevents exploding gradients (if gradients get too large, clipping rescales gradients so their norm ≤ 1, keeps training stable).
+    -	Optimiser step → updates weights in opposite direction of the gradients.
+	-	**Track average training loss per epoch**:
+    - Loss for batch * batch size, then sum these values for every batch, then divide by number of patients in dataset = average loss across all patients in training set → no matter how batch sizes vary we ensure the epoch loss is the mean loss per patient. 
+    - Logged and compared with validation loss for analysis → this is how you see if your model is learning.
+  - **This is the heart of deep learning**: forward → loss → backward → update.
+9. **Validation Loop**
+	-	Run the model on validation set (no gradients).
+	-	Compute average validation loss.
+	-	Update LR scheduler.
+	-	Print progress.
+  - **Rationale**: validation loss tells us if the model is generalising or just memorising.
+10. **Early Stopping**
+	-	If validation loss improves → save model (`tcn_best.pt`).
+	-	If no improvement for 7 epochs → stop training early.
+  - **Rationale**: protects against overfitting and wasted compute.
+11. **Debug Prints**
+  - Sanity checks ensure training data is valid:
+    -	Show unique values of targets.
+    - Binary targets are present (0 and 1).
+    -	Show regression range is healthy (min/max).
+    -	Check for NaN/Inf in inputs (pipeline clean)
 ### Summary of Flow
-1. Forward pass: model computes predictions for the batch.
-2. Loss computation (BCE, MSE): predictions are compared to true labels → gives loss_max, loss_median, loss_reg.
-3. Combine losses: summed to get overall batch loss.
-4. Backward pass: compute gradients → tells how to adjust weights to reduce loss.
-5. Optimizer step: update weights using the gradients.
+**Inputs → Targets → Training → Validation → Early stopping → Saved best model**
+1. **Forward pass**: model computes predictions for the batch.
+2. **Loss computation (BCE, MSE)**: predictions are compared to true labels → gives `loss_max, loss_median, loss_reg`.
+3. **Combine losses**: summed to get overall batch loss.
+4. **Backward pass**: compute gradients → tells how to adjust weights to reduce loss.
+5. **Optimizer step**: update weights using the gradients, gradients determine direction, learning rate determines size.
 6. Repeat until early stoppage to prevent overfitting.
+### Next Steps
+- **Finish Phase 4**: generate visualisations → only the training vs validation loss curves (step 5).
+- **Start Phase 5: Evaluation**
+  -	Perform final evaluation on test set using `tcn_best.pt`
+  -	**Compute metrics**: ROC-AUC, F1, accuracy (classification); RMSE, R² (regression)
+  -	**Generate visualisations**: ROC curves, calibration plots, Regression scatter & residual histogram.
+-	Compare TCN performance to LightGBM baseline and NEWS2 baseline for clinical and technical validation.
 
 
 ### Design Choices
@@ -2789,7 +3095,7 @@ timestep 3: [x1, x2, x3] → output3
 	-	**Reasoning**:
     -	Allows direct comparison with LightGBM baseline.
     -	Multiple metrics ensure a thorough, clinically-relevant evaluation.
-
+  
 
 ### TCN Forward & Backward Pass (Joint Multi-Task)
 
@@ -2855,98 +3161,7 @@ optimizer.zero_grad()    # reset gradients for next batch
 3. **Iterative improvement**: 
   - Repeating forward + backward passes over many batches (epochs) gradually reduces loss → better predictions.
 
-
-building target tensors for each split
-
-Without this step:
-	•	You’d have input sequences (x_train) but no ground-truth outcomes to train on.
-	•	This ensures you have paired data:
-(x_train[i], mask_train[i]) → (y_train_max[i], y_train_median[i], y_train_reg[i]).
-
-
-
-(venv) simonyip@MacBookPro ml-models-tcn % python3 tcn_training_script.py
-[INFO] Targets loaded:
- - train: torch.Size([70]) torch.Size([70]) torch.Size([70])
- - val: torch.Size([15]) torch.Size([15]) torch.Size([15])
- - test: torch.Size([15]) torch.Size([15]) torch.Size([15])
-Epoch 1: Train Loss = nan, Val Loss = nan
-Epoch 2: Train Loss = nan, Val Loss = nan
-Epoch 3: Train Loss = nan, Val Loss = nan
-Epoch 4: Train Loss = nan, Val Loss = nan
-Epoch 5: Train Loss = nan, Val Loss = nan
-Epoch 6: Train Loss = nan, Val Loss = nan
-Epoch 7: Train Loss = nan, Val Loss = nan
-Early stopping at epoch 7
-Training complete. Best model saved to tcn_best.pt
-(venv) simonyip@MacBookPro ml-models-tcn % 
-
-The nan losses from epoch 1 onward mean something blew up numerically before training could even start learning. This is a data/input issue, not the TCN code itself.
-Either the data fed into the model was invalid (NaNs, wrong label encoding), or the optimiser blew up due to too-high learning rate + extreme inputs.
-
-added this code inot the script to figure out what was the issue:
-
-print(y_train_max.unique())
-print(y_train_median.unique())
-print(y_train_reg.min(), y_train_reg.max())
-
-print(torch.isnan(x_train).any(), torch.isinf(x_train).any())
-
-output
-
-tensor([0., 2., 3.])   # max_risk
-tensor([0., 2.])       # median_risk
-
-→ These are not binary {0,1}.
-But BCEWithLogitsLoss requires strictly 0.0 or 1.0 targets.
-
-
-Exactly ✅ — you nailed the first point:
-	•	In patient_df, the columns max_risk and median_risk are ordinal scores (0–3).
-	•	In prepare_tcn_dataset.py, you already derived binary versions (max_risk_binary, median_risk_binary).
-	•	When building targets for the TCN, you should load those binary columns, not the raw ordinal ones. That’s why BCEWithLogitsLoss broke.
-
-fixed with this code in tcn_training_script.py:
-
-target_cols = ["max_risk_binary", "median_risk_binary", "pct_time_high"]
-
-then, still failed, as in the prepare_tcn_dataset.py the chnages were made to a copy, so the csv is still the same csv wiothout the binary columns so we will have to regenerate those columns manually in our training script loading patient-level targets:
-
-# Recreate binary targets (same logic as in prepare_tcn_dataset.py)
-patient_df["max_risk_binary"] = patient_df["max_risk"].apply(lambda x: 1 if x > 2 else 0)
-patient_df["median_risk_binary"] = patient_df["median_risk"].apply(lambda x: 1 if x == 2 else 0)
-
-
-
-Why this works
-	•	The classification heads (BCEWithLogitsLoss) expect binary labels.
-	•	By regenerating the binary columns here, you guarantee the labels are in the right format (0/1).
-	•	You also avoid contaminating your preprocessing pipeline with duplicate CSVs.
-
-
-output:
-
-tensor(True) tensor(False)
-
-  → True for torch.isnan(x_train).any() means your inputs contain NaNs.
-That alone would break training, even if labels were fine.
-Before saving tensors in prepare_tcn_dataset.py, replace NaNs with zeros:
-🔎 Where the NaNs come from
-
-NaNs appear in your timestamp-level dataset (news2_features_timestamp.csv) before padding to tensors.
-Causes include:
-	•	Some vitals/labs missing at certain times.
-	•	Derived features (rolling means, slopes) computed from empty windows.
-	•	Masking logic leaving NaNs in padded rows.
-
-fix in prepare_tcn_dataset.py then reran script to produce new tensors all fixed:
-
-# Clean NaNs and Infs in feature columns
-df[feature_cols] = df[feature_cols].fillna(0.0)
-df[feature_cols] = df[feature_cols].replace([np.inf, -np.inf], 0.0)
-
-
-#### Summary Output
+### Summary Output
 **Console Log Output**
 ```md
 [INFO] Targets loaded:
@@ -3017,8 +3232,206 @@ tensor(False) tensor(False)
 - Early stopping worked correctly to preserve the best model.
 - Losses behave as expected, and the best model is saved automatically.
 -	The input data and target tensors are correctly preprocessed and usable.
-**Next Steps**:
--	Perform final evaluation on test set using tcn_best.pt
--	**Compute metrics**: ROC-AUC, F1, accuracy (classification); RMSE, R² (regression)
--	**Generate visualisations**: loss curves, ROC curves, calibration plots
--	Compare TCN performance to LightGBM baseline for clinical and technical validation.
+
+
+### Reflection
+#### Challenges
+**NaN Losses from Epoch 1**
+-	Training output showed Train Loss = nan, Val Loss = nan from the very first epoch.
+-	This indicated a numerical instability/data issue, not a problem with the TCN model itself.
+- Either the data fed into the model was invalid (NaNs, wrong label encoding), or the optimiser blew up due to too-high learning rate + extreme inputs.
+```md
+[INFO] Targets loaded:
+ - train: torch.Size([70]) torch.Size([70]) torch.Size([70])
+ - val: torch.Size([15]) torch.Size([15]) torch.Size([15])
+ - test: torch.Size([15]) torch.Size([15]) torch.Size([15])
+Epoch 1: Train Loss = nan, Val Loss = nan
+Epoch 2: Train Loss = nan, Val Loss = nan
+Epoch 3: Train Loss = nan, Val Loss = nan
+Epoch 4: Train Loss = nan, Val Loss = nan
+Epoch 5: Train Loss = nan, Val Loss = nan
+Epoch 6: Train Loss = nan, Val Loss = nan
+Epoch 7: Train Loss = nan, Val Loss = nan
+Early stopping at epoch 7
+Training complete. Best model saved to tcn_best.pt
+```
+**Labels not in the correct format**
+- Debug prints revealed that `y_train_max` and `y_train_median` were not binary {0,1}.
+- But our loss function (`BCEWithLogitsLoss`) requires strictly 0.0 or 1.0 targets.
+```md
+tensor([0., 2., 3.])   # max_risk
+tensor([0., 2.])       # median_risk
+```
+-	In patient_df, the columns `max_risk` and `median_risk` are ordinal scores (0–3).
+-	In `prepare_tcn_dataset.py`, we already derived binary versions (`max_risk_binary, median_risk_binary`), but these were saved into `df.copy()`, not the original csv file.
+-	When building targets for the TCN, loaded the raw ordinal columns by accident and could not load the binary columns as they don't exist in the original data. That’s why `BCEWithLogitsLoss` broke.
+**NaNs in input features**
+- Debug prints showed training data itself contained NaNs.
+- These originated from missing vitals/labs, or derived features (slopes, rolling means) leaving NaN in padded rows.
+```md
+tensor(True) tensor(False)
+```
+- True for `torch.isnan(x_train).any()` means that our inputs contain NaNs.
+- That alone would break training, even if labels were fine.
+- Before saving tensors in `prepare_tcn_dataset.py`, replace NaNs with zeros:
+- NaNs appear in timestamp-level dataset (`news2_features_timestamp.csv`) before padding to tensors. Causes include:
+	-	Some vitals/labs missing at certain times.
+	-	Derived features (rolling means, slopes) computed from empty windows.
+	-	Masking logic leaving NaNs in padded rows.
+### Solutions and Learnings 
+**Implemented debugging code**
+- Added this code to the bottom of the script to figure out what was the issue
+- Used outputs to fix code
+```python
+print(y_train_max.unique())
+print(y_train_median.unique())
+print(y_train_reg.min(), y_train_reg.max())
+
+print(torch.isnan(x_train).any(), torch.isinf(x_train).any())
+```
+**Fixed target colums**
+- Fixed label encoding in `tcn_training_script.py`:
+```python
+target_cols = ["max_risk_binary", "median_risk_binary", "pct_time_high"]
+```
+- Still failed, as in `prepare_tcn_dataset.py` the changes were made to a copy DataFrame, so the original patient-level csv is still the same csv without the binary columns.
+- Since the CSV did not persist these columns, regenerated them inside the training script `tcn_training_script.py` loading patient-level targets:
+``` Python
+# Recreate binary targets (same logic as in prepare_tcn_dataset.py)
+patient_df["max_risk_binary"] = patient_df["max_risk"].apply(lambda x: 1 if x > 2 else 0)
+patient_df["median_risk_binary"] = patient_df["median_risk"].apply(lambda x: 1 if x == 2 else 0)
+```
+- Why this works:
+	-	The classification heads (BCEWithLogitsLoss) expect binary labels.
+	-	By regenerating the binary columns here, we guarantee the labels are in the right format (0/1).
+	-	Also avoid contaminating the preprocessing pipeline with duplicate CSVs.
+**Fixed NaN/Inf issues in inputs**
+- Added explicit cleaning step in `prepare_tcn_dataset.py`, then reran script to produce new tensors all fixed:
+```python
+# Clean NaNs and Infs in feature columns
+df[feature_cols] = df[feature_cols].fillna(0.0)
+df[feature_cols] = df[feature_cols].replace([np.inf, -np.inf], 0.0)
+```
+- This replaced all NaN/Inf values with 0.0, ensuring tensors were valid before training.
+### Learning points
+-	NaN losses often point to bad input data or invalid labels. Always check both.
+-	Classification losses (`BCEWithLogitsLoss`) require binary targets (0/1), not ordinal scores.
+-	Debug prints (`.unique(), .min(), .max(), torch.isnan`) are essential tools for verifying training data integrity before running expensive model training.
+-	Cleaning at the data preparation stage prevents downstream errors in training.
+- **Main takeaway**: The failure wasn’t in the TCN architecture but in the data pipeline (labels + NaNs). By regenerating correct binary targets and cleaning NaNs before tensor creation, we stabilised the entire training process.
+
+### Next Steps 
+**Finish Phase 4 (Step 5)**
+1. **Generate Visualisations**
+	-	Training vs Validation loss curves (per epoch) → `plots/loss_curve.png`
+**Start Phase 5**
+
+---
+
+# Phase 5: Evaluation, Baselines & Comparison
+
+---
+
+## Day 21: 
+
+### Phase 5: Evaluation, Baselines & Comparison (Steps 1-9)
+**Goal: Directly compare Phase 4 TCN against the clinical baseline (NEWS2) and Phase 3 LightGBM baseline to demonstrate mastery of both classical ML and modern deep learning. Produce final plots, metrics, interpretability, and inference demo.**
+1. **Final TCN Evaluation on Test Set**
+  - Load `tcn_best.pt` → run on held-out test set `x_test, mask_test` → save predictions (`results/tcn_predictions.csv`) → save metrics (`results/tcn_metrics.json`).
+	- **Test set**: Completely unseen patients, final unbiased check.
+	-	**Collect predictions for**:
+    -	`logit_max` (binary classification)
+    -	`logit_median` (binary classification)
+    -	regression (continuous).
+	-	Convert logits → probabilities using `torch.sigmoid(logits)` for binary tasks.
+  - Save raw predictions and probabilities (e.g. `results/tcn_predictions.csv`) for reproducibility.
+2. **Compute Metrics**
+	-	**Classification (`max_risk_binary, median_risk_binary`)**:
+    -	ROC-AUC (primary ranking metric for imbalanced tasks)
+    -	F1-score (harmonic mean of precision & recall)
+    -	Accuracy
+    -	Precision & Recall (optional / useful clinically)
+	-	**Regression (`pct_time_high`)**:
+    -	RMSE
+    -	R² (explained variance).
+  - Save metric values to a JSON (e.g. `results/tcn_metrics.json`) and log them.
+3. **NEWS2 Clinical Baseline**
+  - Script to compute simple thresholded NEWS2 scores → compare against binary/regression targets.
+	-	Compute NEWS2 baseline predictions for the test set using the saved patient-level scores or from `news2_features_patient.csv`.
+	  -	If NEWS2 outputs a score, choose clinically relevant thresholds (or use score as ranking for ROC).
+	-	Compute the same classification metrics (ROC-AUC, F1, accuracy).
+	-	Save NEWS2 results to `results/news2_metrics.json` and `results/news2_predictions.csv`
+4. **LightGBM Baseline**:
+	-	Load saved LightGBM models from Phase 3 (`deployment_models/`).
+	-	Run them on the frozen test set (`patient_splits.json`).
+	-	**Save**:
+    -	`results/lgbm_predictions.csv`
+    -	`results/lgbm_metrics.json`
+	-	Allows fair comparison directly against TCN and NEWS2.
+5. **Generate Visualisations (NEWS2 vs LightGBM vs TCN)**
+	-	ROC curves (overlay NEWS2, LightGBM, TCN) for both binary tasks → shows model ability to rank patients by risk across all possible decision thresholds → `plots/roc_max.png`, `plots/roc_median.png`
+	-	Calibration plots (predicted prob vs observed) for classification → shows whether predicted probabilities correspond to actual observed risks → `plots/calibration_max.png`
+	-	Regression scatter (predicted vs true) and residual histogram → shows for `pct_time_high`, how close continuous predictions are to true values (scatter around the y=x line) and distribution of errors → `plots/regression_scatter.png`
+  - **Reasoning**: turn numbers into actionable insight, are the models good at ranking patients, are the probabilities trustworthy, do they perform well where it clinically matters?
+6. **Comparisons**
+  -	Produce a single comparison table and plots showing NEWS2 vs LightGBM vs TCN for each target (max, median, pct_time_high).
+	-	Determine whether sequential modelling (TCN) outperforms simpler tabular methods.
+  - **Compare head-to-head**: 
+    - NEWS2 baseline (clinical score, thresholded) 
+    - LightGBM baseline (phase 3)
+    - TCN (phase 4).
+  - **Highlight trade-offs**: 
+    -	NEWS2 → simple, interpretable, clinically trusted.
+    -	LightGBM → classical ML, fast, interpretable-ish.
+    -	TCN → modern DL, higher accuracy, less interpretable.
+  - Save combined results to `results/comparison_table.csv`.
+  - **Reasoning**: Demonstrates true scientific discipline, not just “neural nets are better", but we train and validate rigorously against a baseline, and see whether they actually beat the clinical tool doctors already use.
+7. **Interpretability**
+  - **LightGBM**: 
+    - Interpretable feature importance drivers (HR, RR, SpO₂).
+    - Simpler model = easier feature ranking.
+	- **TCN**: 
+    - Temporal saliency (integrated gradients or Grad-CAM-style saliency over timesteps).
+    - Deep temporal model = harder, but richer temporal insights.
+  - **Contrast LightGBM (static feature drivers) vs TCN (temporal saliency risk patterns)**: 
+    - LightGBM → feature-level interpretability (e.g. “respiratory rate, SpO₂ dominate risk prediction”) → what features matter 
+    -	TCN → temporal interpretability (e.g. “deterioration spikes in respiratory rate at hour 12 drove the prediction”) → when features matter 
+	-	**Purpose**: Show which vitals/labs/time periods drive prediction.
+  - **Reasoning**: clinician-technologist wow factor, not just a black box, but clinically interpretable.
+8. **Inference Demonstration (Deployment-Lite)**
+	-	Add a small inference script (`run_inference.py`) or a notebook demo (`notebooks/inference_demo.ipynb`):
+    -	**Load**: `trained_models/tcn_best.pt` + `deployment_models/preprocessing/standard_scaler.pkl` + `padding_config.json`.
+    -	**Input**: patient time series (or --patient_id) and runs preprocessing identically to training (scaling, padding, mask).
+    -	**Returns**: predicted probabilities and regression output `max_risk_prob, median_risk_prob, pct_time_high_pred`.
+    -	**Example CLI interface**: `python3 run_inference.py --patient_id 123` → returns risk prediction for patient 123 → `--save results/pred_123.json`.
+  - **Reasoning**:
+    -	**Polishes the project**: not just training, but usable and demonstrable.
+    -	Shows ability to package ML into runnable inference.
+    -	Low effort and lightweight compared to full FastAPI/CI/CD, but high payoff in terms of “completeness.”
+	  - This is enough to demonstrate end-to-end usage → shows pipeline usability without full FastAPI/CI/CD.
+9. **Documentation & Notes**
+  - **README additions**:
+    -	**Clear separation**: Phase 3 (LightGBM baseline) vs Phase 4 (TCN) vs Phase 5 (Evaluation).
+    - **Pipeline**: messy clinical data → NEWS2 baseline → tabular ML → deep learning → fair comparison.
+        - Reflections on interpretability + clinical relevance.
+  - **Notes.md**:
+    -	Record metrics, plots, and comparisons.
+    - **Include comparisons**:
+      -	Where TCN outperforms LightGBM/NEWS2 (e.g., better AUC in max_risk).
+      -	Where simpler models are still competitive (e.g., NEWS2 calibration or LightGBM interpretability).
+    - **Contrast interpretability styles**:
+      -	LightGBM → feature importance (static drivers like HR, RR, SpO₂).
+      - TCN → temporal saliency (patterns of deterioration over time).
+**End Products of Phase 5**
+-	A single TCN trained + validated in a multi-task setup (2 classification heads + 1 regression head) fully evaluated.
+- Metrics JSON/CSVs for all baselines + TCN.
+- Plots of ROC, calibration, regression results.
+-	Final comparison table across all models and NEWS2 baseline.
+-	**Deployment-style assets**: Saved models (.pt), preprocessing pipeline (scalers, masks), inference demo script.
+-	**Documentation that proves**: raw messy clinical data → interpretable deep temporal model → fair baseline comparison with classical ML → usable inference.
+**Why not further**: 
+- Skip deploying as a cloud service (FastAPI/CI/CD).
+- FastAPI, CI/CD and live deployment shows you understand production ML workflows (packaging, reproducibility, continuous deployment) but this full-stack deployment is unncessary and time consuming.
+- Inference demo script (deployment-lite) is enough to prove end-to-end usability, full stack ML engineering isn’t necessary here.
+- **Must-have**: training + validation pipeline, test evaluation, metrics, plots, comparison to baselines, inference demo (CLI) + end-to-end reproducibility.
+- **Unique technical story**: clinical baseline (NEWS2) → tabular ML (LightGBM) → deep temporal model (TCN).

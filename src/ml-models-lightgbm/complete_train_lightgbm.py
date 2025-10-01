@@ -68,6 +68,13 @@ if "median_risk" in df.columns:
     df["median_risk"] = df["median_risk"].replace({0: 1})
 
 # -----------------------------
+# Training Summary Initialisation (overwrite old summary at start)
+# -----------------------------
+log_file = MODEL_DIR / "training_summary.txt"
+with open(log_file, "w") as f:
+    f.write("Training Summary\n\n")  
+
+# -----------------------------
 # Training Loop
 # -----------------------------                                                                    
 for target_name in TARGETS:                                                                         # Loop through targets to train a separate model for each target automatically without repeating code
@@ -106,7 +113,7 @@ for target_name in TARGETS:                                                     
     # Explicitly define classes depending on the target
     # Ensures all classes are expected 
     if target_name == "pct_time_high":                          
-        model = lgb.LGBMRegressor(random_state=RANDOM_SEED)                                   # LGBMRegressor → regression for continuous targets (pct_time_high)
+        model = lgb.LGBMRegressor(random_state=RANDOM_SEED)                                         # LGBMRegressor → regression for continuous targets (pct_time_high)
         metric_fn = mean_squared_error                                                              # Evaluation metric mean_squared_error → regression targets (measures squared difference between predicted and true values)    
     else:
         model = lgb.LGBMClassifier(random_state=RANDOM_SEED,                                        # Binary classification for both max_risk and median_risk
@@ -114,6 +121,7 @@ for target_name in TARGETS:                                                     
         metric_fn = roc_auc_score                                                                   # Evaluation metric oc_auc_score → classification targets (good for imbalanced binary classification, it isn’t fooled by always predicting the majority class)
         
     fold_results = []                                                                               # empty list to store results for each fold, after training each fold append the performance metric (e.g., AUROC, MSE) to this list
+    all_fold_importances = []                                                                       # collect feature importances across folds
 
     # -----------------------------
     # Cross-Validation Loop
@@ -186,6 +194,8 @@ for target_name in TARGETS:                                                     
         feat_importances.sort_values(by="importance", ascending=False, inplace=True)                # Sorts the DataFrame in descending order of importance (most important at top), inplace=True → modifies the DataFrame in place without creating a new object.
         feat_importances.to_csv(feat_imp_file, index=False)                                         # Saves the sorted feature importance DataFrame to CSV at the path defined above, index=False → prevents pandas from writing row numbers to the CSV.
 
+        # Collect fold importances
+        all_fold_importances.append(feat_importances.set_index("feature")["importance"])          # Collect feature importances across folds for later averaging
     # -----------------------------
     # Cross-Validation Summary
     # -----------------------------
@@ -213,17 +223,21 @@ for target_name in TARGETS:                                                     
     # -----------------------------
     # Structured log after training (1), summarising: 
     # Dataset shape, Target, Mean CV score, Top 10 features per target
-    log_file = MODEL_DIR / "training_summary.txt"                                                   # Defines a single text file to append a structured summary of training per target.
-    with open(log_file, "a") as f:                                                                  # open file in append mode so new summaries are added without overwriting previous content.
-        f.write(f"Target: {target_name}\n")                                                         # Writes the target name (e.g., max_risk) as a header in the summary file.
-        f.write(f"Dataset shape: {X.shape}\n")                                                      # Records the shape of the feature matrix X for this target. (100, 40) → 100 patients × 40 features.
+    mean_importances = pd.concat(all_fold_importances, axis=1).mean(axis=1).sort_values(ascending=False)  # Average feature importance across folds
+    top10 = mean_importances.head(10)
+
+    # Append to training summary
+    with open(log_file, "a") as f:
+        f.write(f"Target: {target_name}\n")
+        f.write(f"Dataset shape: {X.shape}\n")
         f.write(f"Mean CV score: {mean_score:.4f}\n")
         if target_name != "pct_time_high":
-            f.write(f"Class distribution: {pd.Series(y).value_counts().sort_index().to_dict()}\n")  # Log final class balance
+            f.write(f"Class distribution: {pd.Series(y).value_counts().sort_index().to_dict()}\n")
         f.write("Top 10 features:\n")
-        top10 = feat_importances.head(10)                                                           # Selects the first 10 rows from the sorted feat_importances DataFrame (highest importance first).
-        for i, row in top10.iterrows():                                                             # Loops over the top 10 features and writes each feature name and importance. iterrows() iterates through each row in the DataFrame.
-            f.write(f"  {row['feature']}: {row['importance']:.4f}\n")                 
+        for feature, importance in top10.items():
+            f.write(f"  {feature}: {importance:.0f}\n")
         f.write("\n")
+
+print("\nTraining completed! Check baseline_models/ folder for outputs.")
 
 print("\nTraining completed! Check saved_models/ folder for outputs.")   
