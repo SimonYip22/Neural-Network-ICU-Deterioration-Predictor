@@ -18,6 +18,8 @@ The end-to-end pipeline includes clinically validated NEWS2 preprocessing of 70,
 
 This repository contains code, preprocessed outputs, and documentation only; no raw clinical data is redistributed. Users must obtain the MIMIC-IV dataset directly from PhysioNet and comply with its data use requirements. The work is intended for research and educational use.
 
+The use of a limited demo dataset (100 patients across 140 ICU stays) constrains statistical reliability and generalisability. As a result, reported performance metrics (e.g., ROC-AUC, R²) are likely optimistic and should not be interpreted as clinically valid estimates of real-world performance. The primary objective of this work is to demonstrate pipeline design, feature engineering, and comparative model behaviour under constrained data conditions, rather than to establish definitive predictive accuracy. In a production or research setting, this framework would be extended to the full MIMIC-IV dataset with appropriate patient-level splits, cross-validation, and uncertainty estimation to support robust evaluation.
+
 | Target Outcome           | Best-Performing Model | Key Metric(s)             | Notes |
 |------------------|------------|--------------------------|-------|
 | `max_risk`        | TCN        | ***ROC-AUC*** = *0.923*           | Strong acute deterioration detection |
@@ -102,7 +104,7 @@ _Temporal convolutional network (TCN) architecture used for timestamp-level pred
     - [12.4 Core Insights and Practical Implications](#124-core-insights-and-practical-implications)
 13. [Limitations](#13-limitations)
     - [13.1 Overview](#131-overview)
-    - [13.2 Data & Cohort Constraints](#132-data--cohort-constraints)
+    - [13.2 Data & Statistical Constraints](#132-data--statistical-constraints)
     - [13.3 Modelling & Target Design Constraints](#133-modelling--target-design-constraints)
     - [13.4 Temporal & Architectural Constraints](#134-temporal--architectural-constraints)
     - [13.5 Evaluation & Generalisation Constraints](#135-evaluation--generalisation-constraints)
@@ -2228,44 +2230,52 @@ Exiting per-patient inference.
 
 ### 13.1 Overview
 - This project delivers a full end-to-end deterioration-risk pipeline, but several constraints limit generalisability, temporal expressiveness, and clinical applicability
-- These limitations reflect realistic conditions in applied healthcare ML and define clear directions for future development
+- These limitations reflect realistic conditions in applied healthcare machine learning and define clear directions for future development
 - **The main limiting factors are:**
-  - Small patient cohort of single-centre data  
-  - NEWS2-only vitals features that become only aggregated patient-level targets  
-  - Constrained temporal supervision leading to weaker learning
-  - Absence of external/prospective validation  
-- **These reflect realistic applied healthcare ML constraints and define clear opportunities for future improvement:** larger multi-centre datasets, timestamp-level supervision, richer feature modalities, expanded temporal architectures, and clinician-validated interpretability
+  - Small, single-centre patient cohort  
+  - NEWS2-only feature space with limited modality richness  
+  - Patient-level (aggregate) supervision rather than timestamp-level learning  
+  - Absence of external and prospective validation  
+- **These constraints position the work as methodological validation rather than clinically deployable modelling, while defining clear opportunities for improvement:** larger multi-centre datasets, timestamp-level supervision, richer multimodal inputs, enhanced temporal architectures, and clinically validated interpretability
+
 
 ##
-### 13.2 Data & Cohort Constraints
-- **Small cohort size:** The deep model (TCN) operates near the minimum data required for stable temporal learning. Limited patient diversity restricts generalisation and increases variance
-- **Single-centre dataset:** All data originate from one hospital, external validity, cross-site transferability, and demographic robustness remain untested
-- **Class imbalance:** `median_risk` required `pos_weight`; imbalance still affects calibration reliability
-- **Outcome distribution skew:** `pct_time_high` is heavily right-skewed, log transform stabilised training but the real distribution is narrow and limits learnable variance
-- **NEWS2-only feature space:** No labs, medications, imaging, or high-frequency vitals are included. This constrains signal richness and reduces the benefit normally gained from temporal deep learning models
+### 13.2 Data & Statistical Constraints
+- **Small cohort size (demo dataset):** The use of a limited dataset (~140 ICU stays) introduces high variance in model estimates and increases the risk of overfitting, particularly for high-capacity models such as TCNs
+- **Single-centre dataset:** All data originate from one institution; external validity, cross-site transferability, and demographic robustness remain untested
+- **Optimistic performance estimates:** Metrics such as ROC-AUC and R² are likely inflated due to limited sample size and constrained data diversity
+- **Lack of uncertainty estimation:** Confidence intervals and variance estimates were not computed; in a production or research setting, cross-validation or bootstrapping would be required to quantify metric stability
+- **Class imbalance:** `median_risk` required `pos_weight`; imbalance may still affect calibration and probability reliability
+- **Outcome distribution skew:** `pct_time_high` is heavily right-skewed; log transformation stabilised training but limits effective learnable variance
+- **Limited generalisability:** Results should be interpreted as **methodological validation rather than clinically reliable performance**
+- **Restricted feature space:** NEWS2-derived vitals exclude labs, medications, imaging, and high-frequency signals, constraining signal richness and reducing the advantage of temporal deep learning approaches
 
 ##
 ### 13.3 Modelling & Target Design Constraints
-- **Patient-level supervision only:** Both models predict patient-level summaries (`max_risk`, `median_risk`, `pct_time_high`); TCNs typically require timestamp-level labels to exploit temporal gradients; this setup weakens temporal learning and structurally favours LightGBM
-- **Aggregate/binary targets collapse temporal richness:** Deterioration trajectories are compressed into coarse summaries, this limits temporal model expressiveness and removes short-horizon prediction capability
-- **No ensembles or hybrid architectures:** Models were evaluated independently to preserve methodological clarity, ensemble methods may provide better absolute accuracy but were intentionally excluded
-- **Regression clipping:** Negative values are clipped to 0 in deployment-safe inference, this avoids invalid predictions but introduces minor structural bias
+- **Patient-level supervision only:** Both models predict aggregated patient-level outcomes (`max_risk`, `median_risk`, `pct_time_high`); this limits the ability of temporal models to learn fine-grained deterioration dynamics
+- **Temporal signal compression:** Aggregated targets collapse longitudinal trajectories into coarse summaries, removing short-horizon prediction capability and weakening temporal learning
+- **Structural bias favouring tabular models:** The use of patient-level targets inherently advantages models like LightGBM over sequence-based architectures such as TCNs
+- **No ensemble or hybrid modelling:** Models were evaluated independently to preserve methodological clarity; ensemble approaches may improve absolute performance but were intentionally excluded
+- **Regression clipping:** Negative predictions are clipped to zero during inference; this ensures valid outputs but introduces minor structural bias
 
 ##
 ### 13.4 Temporal & Architectural Constraints
-- **Limited temporal receptive field:** The TCN uses three dilated blocks with small kernel size, long-range ICU dependencies and slow deterioration patterns are only partially captured
-- **Padded/truncated sequences:** Timelines are padded to a fixed length, very short or very long stays may lose informative context
-- **Under-utilisation of deep temporal structure:** Because labels are patient-level, the TCN compresses rich sequences into one scalar embedding; temporal gradients dilute across all timesteps, weakening event-level learning
+- **Limited temporal receptive field:** The TCN uses a relatively shallow architecture with constrained dilation (3 dilated blocks with small kernel sizes), limiting its ability to capture long-range ICU dependencies and slow deterioration patterns
+- **Fixed-length sequence handling:** Sequences are padded or truncated to a uniform length; very short or very long ICU stays may lose informative temporal context
+- **Under-utilisation of temporal structure:** Due to patient-level supervision, the TCN compresses full time-series data into a single embedding, diluting temporal gradients and reducing event-level learning capacity
 
 ##
 ### 13.5 Evaluation & Generalisation Constraints
-- **No external validation:** All evaluation is internal; true generalisation across hospitals, timelines, or care practices is unknown
-- **No temporal or prospective validation:** Tested only on historical, batch-mode data; real-time performance, drift behaviour, and robustness to streaming inputs remain unassessed
+- **No external validation:** All evaluation is performed on internal data; generalisation across institutions, populations, and care settings is untested
+- **No temporal or prospective validation:** Models are evaluated on retrospective, batch data only; real-time performance, robustness to data drift (e.g., concept drift), and behaviour under streaming conditions remain unassessed
+- **Single-split evaluation:** Absence of cross-validation limits robustness of reported metrics and increases sensitivity to dataset partitioning
+
 
 ##
 ### 13.6 Clinical Integration Constraints
-- **No clinician review of interpretability outputs:** SHAP/saliency insights were not validated by domain experts
-- **No EHR or workflow integration:** The pipeline is technically robust but not yet implemented or tested in real decision-support environments
+- **No clinician validation:** Interpretability outputs (e.g., SHAP values, saliency maps) were not reviewed by domain experts; clinical plausibility is inferred but not formally validated
+- **No workflow integration:** The system is not integrated with electronic health record (EHR) systems or clinical decision-making workflows
+- **No real-world deployment testing:** The pipeline has not been evaluated in operational environments; usability, latency, and clinical impact remain untested
 
 ---
 
@@ -2273,7 +2283,7 @@ Exiting per-patient inference.
 
 ### 14.1 Overview & Rationale
 
-- This end-to-end project establishes a fully reproducible cross-model deterioration-risk pipeline
+- This end-to-end project establishes a modular and extensible pipeline
 - Further work focuses on expanding temporal modelling capacity, enriching the clinical feature space, strengthening training and evaluation reliability, and progressing toward real-world deployment
 - **Future progress centres on four directions:**  
   1. **Richer modelling** → deeper temporal models, timestamp-level outputs, multimodal EHR inputs
@@ -2301,6 +2311,9 @@ These extensions would allow the pipeline to evolve from a comparative research 
 ##
 ### 14.3 Training, Optimisation & Model Robustness
 
+- **Scale to full dataset training**  
+  - Extend training from the demo subset to the full MIMIC-IV dataset to increase statistical power, improve generalisation, and enable more reliable estimation of model performance  
+  - Apply patient-level splits and cohort stratification to ensure robust evaluation and avoid leakage across ICU stays  
 - **Improved imbalance and uncertainty modelling**  
   - Evaluate focal loss or class-balanced loss for skewed classification targets, particularly median-risk
   - For regression (`pct_time_high`), explore probabilistic objectives (Gaussian or quantile loss) to capture uncertainty
