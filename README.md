@@ -142,9 +142,9 @@ ICU patient deterioration often emerges through subtle physiological changes hou
 - Support clinical decision-making with actionable, interpretable metrics
 - Provide a foundation for advanced ML-based early warning systems
 
-![NEWS2 API Diagram](https://developer.nhs.uk/apis/news2-1.0.0-alpha.1/images/NEWS2chart.png)
+![NEWS2 Scoring System Chart](https://nhsconnect.github.io/FHIR-NEWS2/images/NEWS2chart.png)
 
-***Figure: NHS Digital, NEWS2 API guide (Open Government Licence v3.0)***  
+***Figure: INTEROPen NHS Digital. NEWS2 Implementation Guide***  
 
 Although the national standard for deterioration detection, NEWS2 has well-recognised constraints:
 - **No temporal modelling:** Although observations are charted sequentially, the scoring algorithm treats each set of vitals independently and does not incorporate trend, slope, variability, or rate-of-change.
@@ -2651,8 +2651,8 @@ BibTeX for LaTeX users:
 - Royal College of Physicians. (2017). *National Early Warning Score (NEWS) 2.*  
 - MDCalc NEWS2 Calculator: [https://www.mdcalc.com/calc/10083/national-early-warning-score-news-2#creator-insights](https://www.mdcalc.com/calc/10083/national-early-warning-score-news-2#creator-insights)
 
-**NEWS2 API Diagram Image**
-- NHS Digital. *NEWS2 API Guide*. [https://developer.nhs.uk/apis/news2-1.0.0-alpha.1/images/NEWS2chart.png](https://developer.nhs.uk/apis/news2-1.0.0-alpha.1/images/NEWS2chart.png)
+**NEWS2 Scoring System Chart Image**
+- INTEROPen NHS Digital. *NEWS2 Implementation Guide*. [https://nhsconnect.github.io/FHIR-NEWS2/images/NEWS2chart.png](https://nhsconnect.github.io/FHIR-NEWS2/images/NEWS2chart.png)
 
 **ChatGPT**
 - Provided guidance throughout the project, including code explanations, debugging, project structure and architectural design
