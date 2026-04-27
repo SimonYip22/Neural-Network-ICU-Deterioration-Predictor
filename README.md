@@ -8,17 +8,15 @@
 
 ## Executive Summary
 
-**Tech stack:** ***Python, PyTorch, Scikit-learn, LightGBM, pandas, NumPy***
-
-This repository presents a dual-architecture machine learning system for early detection of clinical deterioration in intensive care unit (ICU) patients. The system compares gradient-boosted decision trees (LightGBM) with temporal convolutional networks (TCN) to model complementary aspects of physiological risk using routinely collected clinical observations. Three NEWS2-derived deterioration outcomes are considered: maximum risk level attained during the ICU stay (`max_risk`), median sustained risk level across the stay (`median_risk`), and the proportion of time spent in a high-risk state (`pct_time_high`).
+Dual-architecture machine learning system for early detection of clinical deterioration in intensive care unit (ICU) patients. The system compares gradient-boosted decision trees (LightGBM) with temporal convolutional networks (TCN) to model complementary aspects of physiological risk using routinely collected clinical observations. Three NEWS2-derived deterioration outcomes are considered: maximum risk level attained during the ICU stay (`max_risk`), median sustained risk level across the stay (`median_risk`), and the proportion of time spent in a high-risk state (`pct_time_high`).
 
 Models are trained and evaluated using the PhysioNet MIMIC-IV Clinical Demo v2.2 dataset via two distinct feature-engineering pipelines. The TCN operates on high-resolution timestamp-level temporal features (96-hour windows, 171 features) to capture short-term physiological instability, while the LightGBM model uses patient-level aggregated tabular features (40 features) to characterise longer-term exposure to risk. Comparative evaluation indicates complementary performance profiles: LightGBM exhibits superior calibration and regression fidelity for sustained risk estimation, while TCNs show stronger sensitivity and discrimination for acute deterioration events. Performance is assessed using ROC-AUC, Brier score, and R², alongside interpretability analyses based on SHAP values and saliency methods.
 
 The end-to-end pipeline includes clinically validated NEWS2 preprocessing of 70,640 time-stamped measurements over 140 ICU stays (including CO₂ retainer logic, Glasgow Coma Scale mapping, and supplemental oxygen protocols), comprehensive feature engineering, model training with hyperparameter optimisation, robust metric evaluation, and a command-line inference interface supporting batch prediction and per-patient lookup. Overall, the system demonstrates physiologically plausible predictive behaviour, clinically meaningful interpretability, and a reproducible workflow suitable for extension to full clinical datasets or downstream deployment contexts.
 
-This repository contains code, preprocessed outputs, and documentation only; no raw clinical data is redistributed. Users must obtain the MIMIC-IV dataset directly from PhysioNet and comply with its data use requirements. The work is intended for research and educational use.
-
 The use of a limited demo dataset (100 patients across 140 ICU stays) constrains statistical reliability and generalisability. As a result, reported performance metrics (e.g., ROC-AUC, R²) are likely optimistic and should not be interpreted as clinically valid estimates of real-world performance. The primary objective of this work is to demonstrate pipeline design, feature engineering, and comparative model behaviour under constrained data conditions, rather than to establish definitive predictive accuracy. In a production or research setting, this framework would be extended to the full MIMIC-IV dataset with appropriate patient-level splits, cross-validation, and uncertainty estimation to support robust evaluation.
+
+This repository contains code, preprocessed outputs, and documentation only; no raw clinical data is redistributed. Users must obtain the MIMIC-IV dataset directly from PhysioNet and comply with its data use requirements. The work is intended for research and educational use.
 
 | Target Outcome           | Best-Performing Model | Key Metric(s)             | Notes |
 |------------------|------------|--------------------------|-------|
@@ -28,7 +26,9 @@ The use of a limited demo dataset (100 patients across 140 ICU stays) constrains
 
 ![TCN Architecture](images/tcn_architecture_detailed.png)
 
-_Temporal convolutional network (TCN) architecture used for timestamp-level prediction_
+_Figure: Temporal CCN (TCN) architecture used for timestamp-level prediction_
+
+**Technical stack:** _Python, PyTorch, Scikit-learn, LightGBM, pandas, NumPy_
 
 ---
 
@@ -76,14 +76,14 @@ _Temporal convolutional network (TCN) architecture used for timestamp-level pred
    - [8.2 Evaluation Metrics Rationale](#82-evaluation-metrics-rationale)
    - [8.3 LightGBM Evaluation Metrics](#83-lightgbm-evaluation-metrics)
    - [8.4 TCN Evaluation Metrics](#84-tcn-evaluation-metrics)
-9. [Phase 6A: Comparative Analysis: LightGBM vs TCN](#9-phase-6a-comparative-analysis-lightgbm-vs-tcn)
+9. [Phase 6A – Comparative Analysis: LightGBM vs TCN](#9-phase-6a-comparative-analysis-lightgbm-vs-tcn)
    - [9.1 Overview](#91-overview)
    - [9.2 Comparative Analysis Framework](#92-comparative-analysis-framework)
    - [9.3 Metrics Used for Comparison](#93-metrics-used-for-comparison)
    - [9.4 Step 1 – Summary Metric Comparison (Quantitative)](#94-step-1-–-summary-metric-comparison-quantitative)
    - [9.5 Step 2 – Numerical Diagnostics & Visualisation Analysis](#95-step-2-–-numerical-diagnostics--visualisation-analysis)
    - [9.6 Final Integrated Summary](#96-final-integrated-summary)
-10. [Phase 6B: Interpretability – LightGBM SHAP vs TCN Saliency](#10-phase-6b-interpretability-–-lightgbm-shap-vs-tcn-saliency)
+10. [Phase 6B – Interpretability: LightGBM SHAP vs TCN Saliency](#10-phase-6b-interpretability-–-lightgbm-shap-vs-tcn-saliency)
     - [10.1 Why Interpretability Matters in Clinical ML](#101-why-interpretability-matters-in-clinical-ml)
     - [10.2 How Interpretability Fits Into Phase 6](#102-how-interpretability-fits-into-phase-6)
     - [10.3 LightGBM Interpretability: SHAP Background & Overview](#103-lightgbm-interpretability-shap-background--overview)
@@ -91,7 +91,7 @@ _Temporal convolutional network (TCN) architecture used for timestamp-level pred
     - [10.5 TCN Interpretability: Saliency Overview & Rationale](#105-tcn-interpretability-saliency-overview--rationale)
     - [10.6 TCN Interpretability: Saliency Results & Interpretation](#106-tcn-interpretability-saliency-results--interpretation)
     - [10.7 SHAP vs Saliency: Cross-Model Interpretability](#107-shap-vs-saliency-cross-model-interpretability)
-11. [Phase 7: Inference Demonstration (Deployment-Lite)](#11-phase-7-inference-demonstration-deployment-lite)
+11. [Phase 7 – Inference Demonstration (Deployment-Lite)](#11-phase-7-inference-demonstration-deployment-lite)
     - [11.1 Overview](#111-overview)
     - [11.2 Deployment Rationale](#112-deployment-rationale)
     - [11.3 Design Rationale](#113-design-rationale)
@@ -1344,7 +1344,7 @@ Calibration metrics (Brier and ECE) are introduced in Phase 6 because they requi
 
 ---
 
-## 9. Phase 6A: Comparative Analysis: LightGBM vs TCN 
+## 9. Phase 6A – Comparative Analysis: LightGBM vs TCN 
 ### 9.1 Overview 
 
 #### 9.1.1 Purpose of Phase 6
@@ -1689,7 +1689,7 @@ Across all three targets, the models show clear task-specific strengths:
 
 ---
 
-## 10. Phase 6B: Interpretability – LightGBM SHAP vs TCN Saliency
+## 10. Phase 6B – Interpretability: LightGBM SHAP vs TCN Saliency
 
 ### 10.1 Why Interpretability Matters in Clinical ML
 
@@ -2010,7 +2010,7 @@ Cross-model analysis strengthens confidence in key predictors while adding tempo
 
 ---
 
-## 11. Phase 7: Inference Demonstration (Deployment-Lite)
+## 11. Phase 7 – Inference Demonstration (Deployment-Lite)
 
 ### 11.1 Overview
 - Phase 7 introduces a unified, deployment-lite inference pipeline for both model families (LightGBM and TCN)
