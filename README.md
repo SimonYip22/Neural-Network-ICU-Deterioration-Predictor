@@ -133,7 +133,6 @@ _Temporal convolutional network (TCN) architecture used for timestamp-level pred
 
 ---
 
-
 ## 1. Clinical Background & Motivation
 
 ### 1.1 The Problem With NEWS2
@@ -1841,6 +1840,9 @@ Phase 6B uses SHAP (LightGBM) and Saliency (TCN) to provide a complete interpret
 - The model has learned that gaps in monitoring often correlate with deterioration, so these features appear important in SHAP analysis, even though they do not directly reflect physiology
 
 #### 10.4.5 Overall Summary
+
+![Top SHAP Features](images/lightgbm_shap.png)
+
 - Respiratory features (RR, SpO₂, O₂ support) are the strongest predictors across all targets
 - Heart rate and temperature contribute moderately
 - Missingness features (BP, LOC, temperature) indicate real-world data capture gaps and correlate with risk, functioning as indirect markers of instability and reflect real-world monitoring gaps
