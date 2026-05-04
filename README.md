@@ -2635,7 +2635,7 @@ https://doi.org/10.5281/zenodo.18487174
 BibTeX for LaTeX users:
 
 ```bibtex
-@software{yip-2026-predictor,
+@software{yip-2026-time-series-icu-predictor,
   author = {Simon Yip},
   title = {Time-Series ICU Patient Deterioration Predictor},
   url = {https://doi.org/10.5281/zenodo.18487174},
