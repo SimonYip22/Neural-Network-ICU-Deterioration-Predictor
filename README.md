@@ -2374,7 +2374,6 @@ These extensions would allow the pipeline to evolve from a comparative research 
 ```text
 Neural-Network-TimeSeries-ICU-Predictor/
 ├─ data/
-│  ├─ raw_data/                             # MIMIC-IV raw data    
 │  ├─ interim_data/                         # Phase 1 extraction + NEWS2 outputs
 │  └─ processed_data/                       # Phase 2 ML-ready CSV files  
 │
