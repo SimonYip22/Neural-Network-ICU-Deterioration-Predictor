@@ -34,6 +34,9 @@ _Figure: Temporal CCN (TCN) architecture used for timestamp-level prediction_
 
 ## Table of Contents
 
+<details>
+<summary>Expand table of contents</summary>
+
 1. [Clinical Background & Motivation](#1-clinical-background--motivation)
    - [1.1 The Problem With NEWS2](#11-the-problem-with-news2)
    - [1.2 Clinical Escalation Context](#12-clinical-escalation-context)
@@ -130,6 +133,8 @@ _Figure: Temporal CCN (TCN) architecture used for timestamp-level prediction_
 20. [Copyright](#20-copyright)
 21. [Citation](#21-citation)
 22. [Acknowledgments](#22-acknowledgments)
+
+</details>
 
 ---
 
